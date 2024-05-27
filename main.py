@@ -1,4 +1,4 @@
-p#!/usr/bin/env python3
+#!/usr/bin/env python3
 #
 # JWT_Tool version 2.2.6 (09_09_2022)
 # Written by Andy Tyler (@ticarpi)
@@ -1978,4 +1978,135 @@ if __name__ == '__main__':
     if args.mode:
         if args.mode not in ['pb','er', 'cc', 'at']:
             parser.print_usage()
-            cprintc("\nPlease choose a scanning mode (e.g. -M pb):\npb = playbook\ner = force errors\ncc = fuzz common claims\
+            cprintc("\nPlease choose a scanning mode (e.g. -M pb):\npb = playbook\ner = force errors\ncc = fuzz common claims\nat = all tests", "red")
+            exit(1)
+        else:
+            config['argvals']['scanMode'] = args.mode
+    if args.exploit:
+        if args.exploit not in ['a', 'n', 'b', 's', 'i', 'k']:
+            parser.print_usage()
+            cprintc("\nPlease choose an exploit (e.g. -X a):\na = alg:none\nn = null signature\nb = blank password accepted in signature\ns = spoof JWKS (specify JWKS URL with -ju, or set in jwtconf.ini to automate this attack)\nk = key confusion (specify public key with -pk)\ni = inject inline JWKS", "red")
+            exit(1)
+        else:
+            config['argvals']['exploitType'] = args.exploit
+    if args.sign:
+        if args.sign not in ['hs256','hs384','hs512','rs256','rs384','rs512','es256','es384','es512','ps256','ps384','ps512']:
+            parser.print_usage()
+            cprintc("\nPlease choose a signature option (e.g. -S hs256)", "red")
+            exit(1)
+        else:
+            config['argvals']['sigType'] = args.sign
+    headDict, paylDict, sig, contents = validateToken(jwt)
+    paylB64 = base64.urlsafe_b64encode(json.dumps(paylDict,separators=(",",":")).encode()).decode('UTF-8').strip("=")
+    config['argvals']['overridesub'] = "false"
+    if args.targeturl:
+        config['argvals']['targetUrl'] = args.targeturl.replace('%','%%')
+    if args.cookies:
+        config['argvals']['cookies'] = args.cookies
+    if args.headers:
+        config['argvals']['header'] = str(args.headers)
+    if args.dict:
+        config['argvals']['keyList'] = args.dict
+    if args.keyfile:
+        config['argvals']['keyFile'] = args.keyfile
+    if args.password:
+        config['argvals']['key'] = args.password
+    if args.pubkey:
+        config['crypto']['pubkey'] = args.pubkey
+    if args.privkey:
+        config['crypto']['privkey'] = args.privkey
+    if args.jwksfile:
+        config['crypto']['jwks'] = args.jwksfile
+    if args.jwksurl:
+        config['services']['jwksloc'] = args.jwksurl
+    if args.payloadclaim:
+        config['argvals']['payloadclaim'] = str(args.payloadclaim)
+    if args.headerclaim:
+        config['argvals']['headerclaim'] = str(args.headerclaim)
+    if args.payloadvalue:
+        config['argvals']['payloadvalue'] = str(args.payloadvalue)
+    if args.headervalue:
+        config['argvals']['headervalue'] = str(args.headervalue)
+    if args.postdata:
+        config['argvals']['postData'] = args.postdata
+    if args.canaryvalue:
+        config['argvals']['canaryvalue'] = args.canaryvalue
+    if args.noproxy:
+        config['services']['proxy'] = "False"
+    if args.noredir:
+        config['services']['redir'] = "False"
+
+    if not args.crack and not args.exploit and not args.verify and not args.tamper and not args.injectclaims:
+        rejigToken(headDict, paylDict, sig)
+        if args.sign:
+            signingToken(headDict, paylDict)
+    if args.injectclaims:
+        injectionfile = ""
+        newheadDict = headDict
+        newpaylDict = paylDict
+        if args.headerclaim:
+            if not args.headervalue:
+                cprintc("Must specify header values to match header claims to inject.", "red")
+                exit(1)
+            if len(args.headerclaim) != len(args.headervalue):
+                cprintc("Amount of header values must match header claims to inject.", "red")
+                exit(1)
+        if args.payloadclaim:
+            if not args.payloadvalue:
+                cprintc("Must specify payload values to match payload claims to inject.", "red")
+                exit(1)
+            if len(args.payloadclaim) != len(args.payloadvalue):
+                cprintc("Amount of payload values must match payload claims to inject.", "red")
+                exit(1)
+        if args.payloadclaim:
+            for payloadclaim, payloadvalue in zip(args.payloadclaim, args.payloadvalue):
+                if os.path.isfile(payloadvalue):
+                    injectionfile = ["payload", payloadclaim, payloadvalue]
+                else:
+                    newpaylDict, newPaylB64 = injectpayloadclaim(payloadclaim, payloadvalue)
+                    paylB64 = newPaylB64
+            newContents = genContents(headDict, newpaylDict)
+            headDict, paylDict, sig, contents = validateToken(newContents+"."+sig)
+        if args.headerclaim:
+            for headerclaim, headervalue in zip(args.headerclaim, args.headervalue):
+                if os.path.isfile(headervalue):
+                    injectionfile = ["header", headerclaim, headervalue]
+                else:
+                    newheadDict, newHeadB64 = injectheaderclaim(headerclaim, headervalue)
+                    newContents = genContents(newheadDict, paylDict)
+                    headDict, paylDict, sig, contents = validateToken(newContents+"."+sig)
+        if injectionfile:
+            if args.mode:
+                cprintc("Fuzzing cannot be used alongside scanning modes", "red")
+                exit(1)
+            cprintc("Fuzzing file loaded: "+injectionfile[2], "cyan")
+            with open(injectionfile[2], "r", encoding='utf-8', errors='ignore') as valLst:
+                nextVal = valLst.readline()
+                cprintc("Generating tokens from injection file...", "cyan")
+                utf8errors = 0
+                wordcount = 0
+                while nextVal:
+                    if injectionfile[0] == "payload":
+                        newpaylDict, newPaylB64 = injectpayloadclaim(injectionfile[1], nextVal.rstrip())
+                        newContents = genContents(headDict, newpaylDict)
+                        headDict, paylDict, sig, contents = validateToken(newContents+"."+sig)
+                        paylB64 = newPaylB64
+                    elif injectionfile[0] == "header":
+                        newheadDict, newHeadB64 = injectheaderclaim(injectionfile[1], nextVal.rstrip())
+                        newContents = genContents(newheadDict, paylDict)
+                        headDict, paylDict, sig, contents = validateToken(newContents+"."+sig)
+                    injectOut(newheadDict, newpaylDict)
+                    nextVal = valLst.readline()
+            exit(1)
+        else:
+            if not args.mode:
+                injectOut(newheadDict, newpaylDict)
+                exit(1)
+    if args.mode:
+        if not config['argvals']['targeturl'] and not args.bare:
+            cprintc("No target secified (-t), cannot scan offline.", "red")
+            exit(1)
+        runScanning()
+    runActions()
+    exit(1)
+            
